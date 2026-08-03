@@ -1,0 +1,1 @@
+CREATE INDEX `idx_listings_category_created_at` ON `listings` (`category`,`created_at`);
