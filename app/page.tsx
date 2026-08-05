@@ -4,7 +4,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 
-import { demoListings, type Category, type Listing } from "./data";
+import {
+  demoListings,
+  depaFeatureOptions,
+  type Category,
+  type DepaDetails,
+  type DepaFeature,
+  type Listing,
+} from "./data";
 
 const categories: Array<{ id: Category; label: string; short: string }> = [
   { id: "Roomies", label: "Roomes", short: "Habitaciones" },
@@ -27,6 +34,29 @@ const plans = [
   { name: "Transporte", price: "S/ 50", detail: "por servicio al año", icon: "▰" },
 ];
 
+const searchAliasFamilies = [
+  ["habitacion", "cuarto", "dormitorio", "roomie", "roommate"],
+  ["amoblado", "amueblado", "equipado", "muebles"],
+  ["bano", "servicio", "bathroom"],
+  ["escritorio", "oficina", "trabajo", "estudio"],
+  ["cerca", "cercano", "proximo"],
+  ["departamento", "depa", "apartamento"],
+  ["transporte", "movilidad", "traslado"],
+  ["mudanza", "carga", "camion", "camioneta"],
+];
+
+const searchAliases = new Map<string, string[]>();
+for (const family of searchAliasFamilies) {
+  for (const term of family) searchAliases.set(term, family);
+}
+
+const searchStopWords = new Set([
+  "busca", "buscar", "busco", "quiero", "necesito", "para", "por", "una", "uno", "un", "de", "del", "en", "con", "que", "sea", "soles", "s",
+]);
+
+const bedroomOptions = ["Todos", "1", "2", "3", "4+"] as const;
+type BedroomFilter = typeof bedroomOptions[number];
+
 type AuthUser = {
   id: number;
   name: string;
@@ -39,9 +69,12 @@ const money = new Intl.NumberFormat("es-PE", {
   maximumFractionDigits: 0,
 });
 
-function whatsappLink(listing: Listing) {
+function whatsappLink(listing: Listing, stay?: { checkIn: string; checkOut: string; guests: number }) {
+  const stayDetails = listing.category === "Airbnb" && stay
+    ? ` para llegar el ${formatShortDate(stay.checkIn)}, salir el ${formatShortDate(stay.checkOut)} y ${stay.guests} ${stay.guests === 1 ? "huésped" : "huéspedes"}`
+    : "";
   const message = encodeURIComponent(
-    `Hola ${listing.ownerName}, vi “${listing.title}” en roomies20 y me gustaría recibir más información.`,
+    `Hola ${listing.ownerName}, vi “${listing.title}” en roomies20 y me gustaría consultar disponibilidad${stayDetails}.`,
   );
   return `https://wa.me/${listing.ownerWhatsApp}?text=${message}`;
 }
@@ -58,8 +91,16 @@ function Icon({ children }: { children: string }) {
   return <span aria-hidden="true">{children}</span>;
 }
 
-function BrandHomeIcon() {
-  return <svg aria-hidden="true" viewBox="0 0 48 48"><path d="M5 23.2 24 6l19 17.2-4.2 4.6-2.8-2.5V42H12V25.3l-2.8 2.5L5 23.2Z" fill="currentColor" /><path d="M20 42V29h8v13" fill="#ffbd00" /></svg>;
+function BrandKeysIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 64 64">
+      <g transform="rotate(-38 32 32)">
+        <circle cx="14" cy="32" r="12" fill="currentColor" />
+        <circle cx="14" cy="32" r="4.5" fill="#ffbd00" />
+        <path d="M24 28h34v8H24zM41 35h7v10h-7zM51 35h7v7h-7z" fill="currentColor" />
+      </g>
+    </svg>
+  );
 }
 
 function ServiceIcon({ category }: { category: Category }) {
@@ -79,6 +120,10 @@ function SearchIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" strokeWidth="2.8" /><path d="m15.5 15.5 5 5" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" /></svg>;
 }
 
+function FilterIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M7 14v6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><circle cx="14" cy="7" r="2" fill="#fff" stroke="currentColor" strokeWidth="2" /><circle cx="7" cy="17" r="2" fill="#fff" stroke="currentColor" strokeWidth="2" /></svg>;
+}
+
 function GlobeIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M3.5 12h17M12 3c3.5 3.6 3.5 14.4 0 18M12 3c-3.5 3.6-3.5 14.4 0 18" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>;
 }
@@ -93,25 +138,364 @@ function WhatsappIcon() {
 
 function formatShortDate(value: string) {
   return new Intl.DateTimeFormat("es-PE", { day: "numeric", month: "short" })
-    .format(new Date(`${value}T12:00:00`));
+    .format(parseDateValue(value))
+    .replace(".", "")
+    .toLowerCase();
 }
 
-function formatDateRange(from: string, to: string) {
-  const first = new Date(`${from}T12:00:00`);
-  const last = new Date(`${to}T12:00:00`);
-  const month = new Intl.DateTimeFormat("es-PE", { month: "short" }).format(last).replace(".", "").toLowerCase();
-  return `${first.getDate()} – ${last.getDate()} de ${month}`;
+function parseDateValue(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day, 12);
+}
+
+function dateValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function addMonths(date: Date, amount: number) {
+  return new Date(date.getFullYear(), date.getMonth() + amount, 1, 12);
+}
+
+function monthStart(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1, 12);
+}
+
+function stayNights(from: string, to: string) {
+  const first = parseDateValue(from);
+  const last = parseDateValue(to);
+  return Math.max(1, Math.round((Date.UTC(last.getFullYear(), last.getMonth(), last.getDate()) - Date.UTC(first.getFullYear(), first.getMonth(), first.getDate())) / 86_400_000));
+}
+
+function formatCalendarTitle(date: Date) {
+  const label = new Intl.DateTimeFormat("es-PE", { month: "long", year: "numeric" }).format(date);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function formatDetailDate(value: string) {
+  return new Intl.DateTimeFormat("es-PE", { weekday: "short", day: "numeric", month: "short" })
+    .format(parseDateValue(value))
+    .replaceAll(".", "");
+}
+
+type AirbnbDateStage = "arrival" | "departure";
+
+function ChevronIcon({ direction }: { direction: "left" | "right" }) {
+  return <svg aria-hidden="true" viewBox="0 0 24 24"><path d={direction === "left" ? "m15 18-6-6 6-6" : "m9 6 6 6-6 6"} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+}
+
+function CalendarMonth({
+  month,
+  checkIn,
+  checkOut,
+  stage,
+  minimumDate,
+  onSelect,
+}: {
+  month: Date;
+  checkIn: string;
+  checkOut: string;
+  stage: AirbnbDateStage;
+  minimumDate: string;
+  onSelect: (value: string) => void;
+}) {
+  const firstWeekday = (month.getDay() + 6) % 7;
+  const dayCount = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+  const cells: Array<Date | null> = [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: dayCount }, (_, index) => new Date(month.getFullYear(), month.getMonth(), index + 1, 12)),
+  ];
+
+  return (
+    <section className="calendar-month" aria-label={formatCalendarTitle(month)}>
+      <h3>{formatCalendarTitle(month)}</h3>
+      <div className="calendar-weekdays" aria-hidden="true">{["L", "M", "M", "J", "V", "S", "D"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div>
+      <div className="calendar-days">
+        {cells.map((date, index) => {
+          if (!date) return <span className="calendar-empty" key={`empty-${index}`} />;
+          const value = dateValue(date);
+          const disabled = value < minimumDate || (stage === "departure" && value < checkIn);
+          const isStart = value === checkIn;
+          const isEnd = value === checkOut;
+          const isBetween = value > checkIn && value < checkOut;
+          const className = ["calendar-day", isStart ? "range-start" : "", isEnd ? "range-end" : "", isBetween ? "in-range" : ""].filter(Boolean).join(" ");
+          return <button key={value} className={className} disabled={disabled} onClick={() => onSelect(value)} aria-label={`${date.getDate()} de ${formatCalendarTitle(month)}${isStart ? ", llegada" : isEnd ? ", salida" : ""}`} aria-pressed={isStart || isEnd}><span>{date.getDate()}</span></button>;
+        })}
+      </div>
+    </section>
+  );
+}
+
+function AirbnbDatePicker({
+  checkIn,
+  checkOut,
+  stage,
+  visibleMonth,
+  onStageChange,
+  onMonthChange,
+  onSelect,
+  onClose,
+}: {
+  checkIn: string;
+  checkOut: string;
+  stage: AirbnbDateStage;
+  visibleMonth: Date;
+  onStageChange: (stage: AirbnbDateStage) => void;
+  onMonthChange: (month: Date) => void;
+  onSelect: (value: string) => void;
+  onClose: () => void;
+}) {
+  const today = dateValue(new Date());
+  const firstAllowedMonth = monthStart(parseDateValue(today));
+  const nights = stayNights(checkIn, checkOut);
+  const previousDisabled = dateValue(monthStart(visibleMonth)) <= dateValue(firstAllowedMonth);
+
+  return (
+    <div className="airbnb-date-popover" role="dialog" aria-modal="false" aria-label="Seleccionar fecha de llegada y fecha de salida">
+      <div className="calendar-heading">
+        <div><span className="modal-kicker">Reserva por noches</span><strong>Elige tu llegada y salida</strong><small>{stage === "arrival" ? "Selecciona la fecha de llegada." : `Selecciona la salida · ${nights} ${nights === 1 ? "noche" : "noches"}.`}</small></div>
+        <button className="calendar-close" onClick={onClose} aria-label="Cerrar calendario">×</button>
+      </div>
+      <div className="calendar-date-summary" role="group" aria-label="Fechas seleccionadas">
+        <button className={stage === "arrival" ? "active" : ""} onClick={() => onStageChange("arrival")}><span>Llegada</span><strong>{formatDetailDate(checkIn)}</strong></button>
+        <span aria-hidden="true">→</span>
+        <button className={stage === "departure" ? "active" : ""} onClick={() => onStageChange("departure")}><span>Salida</span><strong>{formatDetailDate(checkOut)}</strong></button>
+      </div>
+      <div className="calendar-navigation">
+        <button disabled={previousDisabled} onClick={() => onMonthChange(addMonths(visibleMonth, -1))} aria-label="Mes anterior"><ChevronIcon direction="left" /></button>
+        <span>{nights} {nights === 1 ? "noche seleccionada" : "noches seleccionadas"}</span>
+        <button onClick={() => onMonthChange(addMonths(visibleMonth, 1))} aria-label="Mes siguiente"><ChevronIcon direction="right" /></button>
+      </div>
+      <div className="calendar-months">
+        <CalendarMonth month={visibleMonth} checkIn={checkIn} checkOut={checkOut} stage={stage} minimumDate={today} onSelect={onSelect} />
+        <CalendarMonth month={addMonths(visibleMonth, 1)} checkIn={checkIn} checkOut={checkOut} stage={stage} minimumDate={today} onSelect={onSelect} />
+      </div>
+      <div className="calendar-footer"><span>El precio final se calcula por la cantidad de noches.</span><button onClick={onClose}>Listo</button></div>
+    </div>
+  );
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function editDistance(left: string, right: string) {
+  if (left === right) return 0;
+  if (Math.abs(left.length - right.length) > 2) return 3;
+
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length];
+}
+
+function tokenMatchScore(queryToken: string, candidateToken: string) {
+  if (queryToken === candidateToken) return 7;
+  if (candidateToken.startsWith(queryToken) || queryToken.startsWith(candidateToken)) return 5;
+  if (queryToken.length >= 4 && candidateToken.includes(queryToken)) return 4;
+  if (queryToken.length >= 4 && editDistance(queryToken, candidateToken) <= (queryToken.length >= 7 ? 2 : 1)) return 2;
+  return 0;
+}
+
+function listingSearchScore(listing: Listing, query: string) {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return 0;
+
+  const priceCeilingMatch = normalizedQuery.match(/\b(?:hasta|maximo|max|menos\s+de)\s+(?:s\s*)?(\d{2,5})\b/);
+  if (priceCeilingMatch && listing.price > Number(priceCeilingMatch[1])) return -1;
+
+  const termSource = priceCeilingMatch
+    ? normalizedQuery.replace(priceCeilingMatch[0], " ")
+    : normalizedQuery;
+  const queryTokens = termSource
+    .split(/\s+/)
+    .filter((token) => token && !searchStopWords.has(token));
+
+  if (!queryTokens.length) return 1;
+
+  const normalizedListingText = normalizeSearchText([
+    listing.title,
+    listing.location,
+    listing.meta,
+    listing.description,
+  ].join(" "));
+  const furnishingIntent = queryTokens.some((token) => (searchAliases.get(token) ?? []).includes("amoblado"));
+  const wantsUnfurnished = /\bsin\s+(?:amoblar|amueblar|muebles|equipar)\b/.test(normalizedQuery);
+  const listingIsUnfurnished = /\bsin\s+(?:amoblar|amueblar|muebles|equipar)\b/.test(normalizedListingText);
+  if (furnishingIntent && !wantsUnfurnished && listingIsUnfurnished) return -1;
+
+  const fields = [
+    { value: listing.title, weight: 10 },
+    { value: listing.location, weight: 9 },
+    { value: listing.details?.address ?? "", weight: 9 },
+    { value: listing.meta, weight: 7 },
+    { value: listing.description, weight: 5 },
+    { value: listing.details?.features.join(" ") ?? "", weight: 6 },
+    { value: listing.badge ?? "", weight: 3 },
+    { value: listing.ownerName, weight: 2 },
+    { value: `${listing.price} soles`, weight: 5 },
+  ].map((field) => ({ ...field, normalized: normalizeSearchText(field.value) }));
+
+  let score = 0;
+  for (const queryToken of queryTokens) {
+    const alternatives = searchAliases.get(queryToken) ?? [queryToken];
+    let bestTokenScore = 0;
+
+    for (const field of fields) {
+      const candidateTokens = field.normalized.split(/\s+/).filter(Boolean);
+      for (const alternative of alternatives) {
+        if (field.normalized.includes(alternative)) {
+          bestTokenScore = Math.max(bestTokenScore, field.weight * 5);
+        }
+        for (const candidateToken of candidateTokens) {
+          bestTokenScore = Math.max(bestTokenScore, tokenMatchScore(alternative, candidateToken) * field.weight);
+        }
+      }
+    }
+
+    if (!bestTokenScore) return -1;
+    score += bestTokenScore;
+  }
+
+  const combinedText = fields.map((field) => field.normalized).join(" ");
+  const meaningfulPhrase = queryTokens.join(" ");
+  if (meaningfulPhrase.length >= 4 && combinedText.includes(meaningfulPhrase)) score += 80;
+  return score;
+}
+
+function rangeLabel(minimum: number, maximum: number, singular: string, plural: string) {
+  if (minimum === maximum) return `${minimum} ${minimum === 1 ? singular : plural}`;
+  return `${minimum} a ${maximum} ${plural}`;
+}
+
+function inferredRange(meta: string, noun: "dormitorios" | "baños") {
+  const normalized = normalizeSearchText(meta);
+  const pattern = noun === "dormitorios"
+    ? /(\d+)\s*(?:a\s*(\d+))?\s*(?:dormitorios?|habitaciones?)/
+    : /(\d+)\s*(?:a\s*(\d+))?\s*banos?/;
+  const match = normalized.match(pattern);
+  const minimum = match ? Number(match[1]) : 1;
+  return { minimum, maximum: match?.[2] ? Number(match[2]) : minimum };
+}
+
+function depaDetails(listing: Listing): DepaDetails {
+  if (listing.details) return listing.details;
+  const bedrooms = inferredRange(listing.meta, "dormitorios");
+  const bathrooms = inferredRange(listing.meta, "baños");
+  const searchable = normalizeSearchText(`${listing.meta} ${listing.description}`);
+  const features = depaFeatureOptions.filter((feature) => {
+    const normalizedFeature = normalizeSearchText(feature);
+    if (normalizedFeature === "area de lavanderia") return searchable.includes("lavanderia");
+    if (normalizedFeature === "permite mascotas") return searchable.includes("mascota");
+    return searchable.includes(normalizedFeature);
+  });
+  return {
+    delivery: listing.badge ?? "Disponible ahora",
+    availability: "Alquiler mensual",
+    address: listing.location,
+    units: 1,
+    areaTotal: "Área por consultar",
+    areaCovered: "Área techada por consultar",
+    bedroomsMin: bedrooms.minimum,
+    bedroomsMax: bedrooms.maximum,
+    bathroomsMin: bathrooms.minimum,
+    bathroomsMax: bathrooms.maximum,
+    features,
+  };
+}
+
+function DepaFilterControls({
+  bedrooms,
+  minimumPrice,
+  maximumPrice,
+  features,
+  onBedroomsChange,
+  onMinimumPriceChange,
+  onMaximumPriceChange,
+  onToggleFeature,
+}: {
+  bedrooms: BedroomFilter;
+  minimumPrice: string;
+  maximumPrice: string;
+  features: DepaFeature[];
+  onBedroomsChange: (value: BedroomFilter) => void;
+  onMinimumPriceChange: (value: string) => void;
+  onMaximumPriceChange: (value: string) => void;
+  onToggleFeature: (feature: DepaFeature) => void;
+}) {
+  return (
+    <div className="depa-filter-content">
+      <section className="depa-filter-section">
+        <h3>¿Cuántos dormitorios buscas?</h3>
+        <div className="bedroom-options" role="group" aria-label="Cantidad de dormitorios">
+          {bedroomOptions.map((option) => (
+            <button key={option} className={bedrooms === option ? "selected" : ""} aria-pressed={bedrooms === option} onClick={() => onBedroomsChange(option)}>
+              {option === "Todos" ? "Cualquiera" : option === "4+" ? "4 o más" : `${option} dorm.`}
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="depa-filter-section">
+        <h3>¿Cuánto quieres pagar?</h3>
+        <div className="depa-price-range">
+          <label><span>Precio mínimo</span><div><b>S/</b><input type="number" min="0" inputMode="numeric" value={minimumPrice} onChange={(event) => onMinimumPriceChange(event.target.value)} placeholder="Sin mínimo" /></div></label>
+          <span className="price-separator" aria-hidden="true">—</span>
+          <label><span>Precio máximo</span><div><b>S/</b><input type="number" min="0" inputMode="numeric" value={maximumPrice} onChange={(event) => onMaximumPriceChange(event.target.value)} placeholder="Sin máximo" /></div></label>
+        </div>
+      </section>
+      <section className="depa-filter-section depa-features-section">
+        <h3>¿Quieres agregar características a tu búsqueda?</h3>
+        <p>Puedes seleccionar más de una opción.</p>
+        <div className="feature-options" role="group" aria-label="Características del departamento">
+          {depaFeatureOptions.map((feature) => {
+            const selected = features.includes(feature);
+            return <button key={feature} className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => onToggleFeature(feature)}><span>{selected ? "✓" : "+"}</span>{feature}</button>;
+          })}
+        </div>
+      </section>
+    </div>
+  );
 }
 
 export default function Home() {
   const [activeCategory, setActiveCategory] = useState<Category>("Roomies");
   const [search, setSearch] = useState("");
   const [service, setService] = useState("Todos");
+  const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
-  const [checkIn, setCheckIn] = useState("2026-08-19");
-  const [checkOut, setCheckOut] = useState("2026-08-20");
+  const [bedrooms, setBedrooms] = useState<BedroomFilter>("Todos");
+  const [selectedDepaFeatures, setSelectedDepaFeatures] = useState<DepaFeature[]>([]);
+  const [checkIn, setCheckIn] = useState(() => dateValue(addDays(new Date(), 14)));
+  const [checkOut, setCheckOut] = useState(() => dateValue(addDays(new Date(), 15)));
   const [guestCount, setGuestCount] = useState(2);
   const [showSearchOptions, setShowSearchOptions] = useState(false);
+  const [showAirbnbCalendar, setShowAirbnbCalendar] = useState(false);
+  const [showAirbnbGuests, setShowAirbnbGuests] = useState(false);
+  const [airbnbDateStage, setAirbnbDateStage] = useState<AirbnbDateStage>("arrival");
+  const [calendarMonth, setCalendarMonth] = useState(() => monthStart(addDays(new Date(), 14)));
+  const [showDepaFilters, setShowDepaFilters] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showPlans, setShowPlans] = useState(false);
@@ -129,10 +513,23 @@ export default function Home() {
   const [notice, setNotice] = useState("");
 
   const detail = categoryDetails[activeCategory];
-  const searchDateLabel = activeCategory === "Transporte" ? detail.date : formatDateRange(checkIn, checkOut);
+  const airbnbNights = stayNights(checkIn, checkOut);
   const dateLabel = activeCategory === "Airbnb"
-    ? `${formatShortDate(checkIn)} – ${formatShortDate(checkOut)}`
+    ? `${formatShortDate(checkIn)} – ${formatShortDate(checkOut)} · ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}`
     : detail.date;
+  const bedroomSummary = bedrooms === "Todos"
+    ? "Cualquier cantidad"
+    : bedrooms === "4+"
+      ? "4 o más dormitorios"
+      : `${bedrooms} ${bedrooms === "1" ? "dormitorio" : "dormitorios"}`;
+  const budgetSummary = minPrice && maxPrice
+    ? `S/ ${Number(minPrice).toLocaleString("es-PE")} – ${Number(maxPrice).toLocaleString("es-PE")}`
+    : maxPrice
+      ? `Hasta S/ ${Number(maxPrice).toLocaleString("es-PE")}`
+      : minPrice
+        ? `Desde S/ ${Number(minPrice).toLocaleString("es-PE")}`
+        : "Cualquier presupuesto";
+  const activeDepaFilterCount = (bedrooms === "Todos" ? 0 : 1) + (minPrice ? 1 : 0) + (maxPrice ? 1 : 0) + selectedDepaFeatures.length;
 
   useEffect(() => {
     let cancelled = false;
@@ -198,16 +595,34 @@ export default function Home() {
     .filter((listing) => listing.category === activeCategory);
 
   const visibleListings = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
+    const parsedMin = Number(minPrice);
     const parsedMax = Number(maxPrice);
-    return categoryListings.filter((listing) => {
-      const haystack = [listing.title, listing.location, listing.meta, listing.description].join(" ").toLowerCase();
-      if (normalizedSearch && !haystack.includes(normalizedSearch)) return false;
+    const filteredListings = categoryListings.filter((listing) => {
       if (activeCategory === "Transporte" && service !== "Todos" && listing.service !== service) return false;
+      if (activeCategory === "Depas" && minPrice && listing.price < parsedMin) return false;
       if (maxPrice && listing.price > parsedMax) return false;
+      if (activeCategory === "Depas") {
+        const details = depaDetails(listing);
+        if (bedrooms !== "Todos") {
+          const requestedBedrooms = bedrooms === "4+" ? 4 : Number(bedrooms);
+          if (bedrooms === "4+") {
+            if (details.bedroomsMax < requestedBedrooms) return false;
+          } else if (requestedBedrooms < details.bedroomsMin || requestedBedrooms > details.bedroomsMax) {
+            return false;
+          }
+        }
+        if (!selectedDepaFeatures.every((feature) => details.features.includes(feature))) return false;
+      }
       return true;
     });
-  }, [activeCategory, categoryListings, maxPrice, search, service]);
+
+    if (!search.trim()) return filteredListings;
+    return filteredListings
+      .map((listing) => ({ listing, score: listingSearchScore(listing, search) }))
+      .filter((result) => result.score >= 0)
+      .sort((left, right) => right.score - left.score)
+      .map((result) => result.listing);
+  }, [activeCategory, bedrooms, categoryListings, maxPrice, minPrice, search, selectedDepaFeatures, service]);
 
   const selectedGallery = selectedListing ? listingImages(selectedListing) : [];
   const safeSelectedImageIndex = selectedGallery.length
@@ -216,9 +631,66 @@ export default function Home() {
 
   function changeCategory(category: Category) {
     setActiveCategory(category);
+    setSearch("");
     setService("Todos");
+    setMinPrice("");
     setMaxPrice("");
+    setBedrooms("Todos");
+    setSelectedDepaFeatures([]);
+    setShowSearchOptions(false);
+    setShowAirbnbCalendar(false);
+    setShowAirbnbGuests(false);
+    setShowDepaFilters(false);
     setShowMenu(false);
+  }
+
+  function runSearch() {
+    setShowSearchOptions(false);
+    setShowAirbnbCalendar(false);
+    setShowAirbnbGuests(false);
+    setShowDepaFilters(false);
+    document.getElementById("results")?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function openDepaFilters() {
+    setShowSearchOptions(false);
+    setShowAirbnbCalendar(false);
+    setShowAirbnbGuests(false);
+    setShowDepaFilters(true);
+  }
+
+  function openAirbnbCalendar(stage: AirbnbDateStage) {
+    const selectedDate = stage === "arrival" ? checkIn : checkOut;
+    setAirbnbDateStage(stage);
+    setCalendarMonth(monthStart(parseDateValue(selectedDate)));
+    setShowAirbnbCalendar(true);
+    setShowAirbnbGuests(false);
+    setShowSearchOptions(false);
+    setShowDepaFilters(false);
+  }
+
+  function selectAirbnbDate(value: string) {
+    if (airbnbDateStage === "arrival") {
+      setCheckIn(value);
+      setCheckOut(dateValue(addDays(parseDateValue(value), 1)));
+      setAirbnbDateStage("departure");
+      return;
+    }
+    if (value <= checkIn) return;
+    setCheckOut(value);
+  }
+
+  function openAirbnbGuests() {
+    setShowAirbnbGuests((open) => !open);
+    setShowAirbnbCalendar(false);
+    setShowSearchOptions(false);
+    setShowDepaFilters(false);
+  }
+
+  function toggleDepaFeature(feature: DepaFeature) {
+    setSelectedDepaFeatures((current) => current.includes(feature)
+      ? current.filter((item) => item !== feature)
+      : [...current, feature]);
   }
 
   async function toggleFavorite(id: number) {
@@ -258,8 +730,11 @@ export default function Home() {
 
   function resetFilters() {
     setSearch("");
+    setMinPrice("");
     setMaxPrice("");
     setService("Todos");
+    setBedrooms("Todos");
+    setSelectedDepaFeatures([]);
   }
 
   function requestPublish() {
@@ -309,13 +784,13 @@ export default function Home() {
       <header className="market-header">
         <div className="services-top">
           <button className="brand" onClick={() => changeCategory("Roomies")} aria-label="Ir al inicio de roomies20">
-            <span className="brand-symbol"><BrandHomeIcon /></span>
+            <span className="brand-symbol"><BrandKeysIcon /></span>
             <span>roomies20</span>
           </button>
 
           <nav className="service-nav" aria-label="Servicios de roomies20">
             {categories.map((category) => (
-              <button key={category.id} className={`service-tab ${activeCategory === category.id ? "active" : ""}`} onClick={() => changeCategory(category.id)}>
+              <button key={category.id} className={`service-tab ${activeCategory === category.id ? "active" : ""}`} aria-current={activeCategory === category.id ? "page" : undefined} onClick={() => changeCategory(category.id)}>
                 <span className={`service-icon service-icon-${category.id.toLowerCase()}`}><ServiceIcon category={category.id} /></span>
                 <span><strong>{category.label}</strong><small>{category.short}</small></span>
               </button>
@@ -323,7 +798,7 @@ export default function Home() {
           </nav>
 
           <div className="header-actions">
-            <button className="host-link" onClick={requestPublish}>Anuncia</button>
+            <button className="host-link" onClick={() => setShowLogin(true)}>{currentUser ? "Mi cuenta" : "Iniciar sesión"}</button>
             <button className="globe-button" aria-label="Idioma y moneda"><GlobeIcon /></button>
             <button className="menu-trigger" aria-label="Abrir menú" aria-expanded={showMenu} onClick={() => setShowMenu((open) => !open)}>
               <span className="hamburger"><i /><i /><i /></span>
@@ -332,24 +807,92 @@ export default function Home() {
         </div>
 
         <div className="search-row">
-          <div className="compact-search" role="search">
+          <div className={`compact-search ${activeCategory === "Roomies" ? "roomies-search" : ""} ${activeCategory === "Depas" ? "depas-search" : ""} ${activeCategory === "Airbnb" ? "airbnb-search" : ""}`} role="search">
             <label className="compact-field location-field">
               <span className="location-icon"><LocationIcon /></span>
-              <input aria-label="Ubicación" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Alojamientos en Santa Cruz de la Sierra" />
+              <input
+                aria-label={activeCategory === "Roomies" ? "Buscar habitaciones" : "Ubicación"}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") runSearch(); }}
+                placeholder={activeCategory === "Roomies" ? "Distrito, zona o cuarto" : activeCategory === "Depas" ? "Busca departamentos por distrito o ciudad" : activeCategory === "Airbnb" ? "Busca alojamientos por destino" : "Busca mudanzas o transporte corporativo"}
+              />
             </label>
-            <button className="compact-field date-field" onClick={() => setShowSearchOptions((open) => !open)}>
-              <strong>{searchDateLabel}</strong>
-            </button>
-            <button className="compact-field guest-field" onClick={() => setShowSearchOptions((open) => !open)}>
-              <strong>{activeCategory === "Transporte" ? detail.guests : `${guestCount} ${guestCount === 1 ? "huésped" : "huéspedes"}`}</strong>
-            </button>
-            <button className="search-button" onClick={() => { setShowSearchOptions(false); document.getElementById("results")?.scrollIntoView({ behavior: "smooth" }); }} aria-label="Buscar">
+            {activeCategory === "Depas" && <>
+              <button className="compact-field depa-filter-field" onClick={openDepaFilters} aria-expanded={showDepaFilters}>
+                <span>Dormitorios</span><strong>{bedroomSummary}</strong>
+              </button>
+              <button className="compact-field depa-filter-field" onClick={openDepaFilters} aria-expanded={showDepaFilters}>
+                <span>Presupuesto</span><strong>{budgetSummary}</strong>
+              </button>
+              <button className="depa-mobile-filter" onClick={openDepaFilters} aria-label={`Abrir filtros de departamentos${activeDepaFilterCount ? `, ${activeDepaFilterCount} activos` : ""}`} aria-expanded={showDepaFilters}>
+                <FilterIcon />{activeDepaFilterCount > 0 && <b>{activeDepaFilterCount}</b>}
+              </button>
+            </>}
+            {activeCategory === "Airbnb" && <>
+              <button className={`compact-field airbnb-date-field ${showAirbnbCalendar && airbnbDateStage === "arrival" ? "active" : ""}`} onClick={() => openAirbnbCalendar("arrival")} aria-label={`Llegada, ${formatDetailDate(checkIn)}`} aria-expanded={showAirbnbCalendar && airbnbDateStage === "arrival"}>
+                <span>Llegada</span><strong>{formatShortDate(checkIn)}</strong>
+              </button>
+              <button className={`compact-field airbnb-date-field ${showAirbnbCalendar && airbnbDateStage === "departure" ? "active" : ""}`} onClick={() => openAirbnbCalendar("departure")} aria-label={`Salida, ${formatDetailDate(checkOut)}`} aria-expanded={showAirbnbCalendar && airbnbDateStage === "departure"}>
+                <span>Salida</span><strong>{formatShortDate(checkOut)}</strong>
+              </button>
+              <button className={`compact-field guest-field airbnb-guest-field ${showAirbnbGuests ? "active" : ""}`} onClick={openAirbnbGuests} aria-expanded={showAirbnbGuests}>
+                <span>Huéspedes</span><strong>{guestCount} {guestCount === 1 ? "huésped" : "huéspedes"}</strong>
+              </button>
+            </>}
+            {activeCategory === "Transporte" && <>
+              <button className="compact-field date-field" onClick={() => setShowSearchOptions((open) => !open)} aria-expanded={showSearchOptions}>
+                <strong>{detail.date}</strong>
+              </button>
+              <button className="compact-field guest-field" onClick={() => setShowSearchOptions((open) => !open)} aria-expanded={showSearchOptions}>
+                <strong>{detail.guests}</strong>
+              </button>
+            </>}
+            <button className="search-button" onClick={runSearch} aria-label="Buscar">
               <SearchIcon />
             </button>
           </div>
         </div>
 
-        {showSearchOptions && (
+        {showDepaFilters && activeCategory === "Depas" && (
+          <div className="depa-filter-popover" role="dialog" aria-label="Filtros de departamentos">
+            <div className="depa-filter-heading"><div><strong>Encuentra el departamento ideal</strong><span>Los resultados se actualizan al instante.</span></div><button onClick={() => setShowDepaFilters(false)} aria-label="Cerrar filtros">×</button></div>
+            <DepaFilterControls
+              bedrooms={bedrooms}
+              minimumPrice={minPrice}
+              maximumPrice={maxPrice}
+              features={selectedDepaFeatures}
+              onBedroomsChange={setBedrooms}
+              onMinimumPriceChange={setMinPrice}
+              onMaximumPriceChange={setMaxPrice}
+              onToggleFeature={toggleDepaFeature}
+            />
+            <div className="depa-filter-footer"><button className="text-action" onClick={resetFilters}>Limpiar todo</button><button className="dark-button" onClick={runSearch}>Ver {visibleListings.length} {visibleListings.length === 1 ? "departamento" : "departamentos"}</button></div>
+          </div>
+        )}
+
+        {showAirbnbCalendar && activeCategory === "Airbnb" && <AirbnbDatePicker
+          checkIn={checkIn}
+          checkOut={checkOut}
+          stage={airbnbDateStage}
+          visibleMonth={calendarMonth}
+          onStageChange={(stage) => {
+            setAirbnbDateStage(stage);
+            setCalendarMonth(monthStart(parseDateValue(stage === "arrival" ? checkIn : checkOut)));
+          }}
+          onMonthChange={setCalendarMonth}
+          onSelect={selectAirbnbDate}
+          onClose={() => setShowAirbnbCalendar(false)}
+        />}
+
+        {showAirbnbGuests && activeCategory === "Airbnb" && (
+          <div className="airbnb-guests-popover" role="dialog" aria-label="Cantidad de huéspedes">
+            <div className="guest-control"><span><strong>Huéspedes</strong><small>Adultos y viajeros desde 13 años</small></span><div><button onClick={() => setGuestCount((count) => Math.max(1, count - 1))} disabled={guestCount === 1} aria-label="Quitar huésped">−</button><b>{guestCount}</b><button onClick={() => setGuestCount((count) => Math.min(16, count + 1))} disabled={guestCount === 16} aria-label="Agregar huésped">＋</button></div></div>
+            <button className="apply-search" onClick={() => setShowAirbnbGuests(false)}>Listo</button>
+          </div>
+        )}
+
+        {showSearchOptions && activeCategory === "Transporte" && (
           <div className="search-options-popover">
             <div className="date-controls"><label>Llegada<input type="date" value={checkIn} onChange={(event) => setCheckIn(event.target.value)} /></label><label>Salida<input type="date" min={checkIn} value={checkOut} onChange={(event) => setCheckOut(event.target.value)} /></label></div>
             <div className="guest-control"><span><strong>Viajeros</strong><small>¿Cuántas personas van?</small></span><div><button onClick={() => setGuestCount((count) => Math.max(1, count - 1))} aria-label="Quitar huésped">−</button><b>{guestCount}</b><button onClick={() => setGuestCount((count) => Math.min(16, count + 1))} aria-label="Agregar huésped">＋</button></div></div>
@@ -372,15 +915,20 @@ export default function Home() {
 
       <main className="results-layout" id="results">
         <section className="list-panel">
-          <h1 className="sr-only">{loadedCategory !== activeCategory ? "Buscando opciones…" : `${visibleListings.length} ${detail.noun} en ${search || "Santa Cruz de la Sierra"}`}</h1>
+          {activeCategory === "Depas" ? (
+            <div className="depa-results-heading">
+              <div><h1>{search ? `Departamentos en ${search}` : "Departamentos en Lima"}</h1><p>{loadedCategory !== activeCategory ? "Buscando opciones…" : `${visibleListings.length} ${visibleListings.length === 1 ? "proyecto disponible" : "proyectos disponibles"} · Alquiler mensual con contacto directo`}</p></div>
+              <button onClick={openDepaFilters}><FilterIcon /><span>Filtros</span>{activeDepaFilterCount > 0 && <b>{activeDepaFilterCount}</b>}</button>
+            </div>
+          ) : <h1 className="sr-only">{loadedCategory !== activeCategory ? "Buscando opciones…" : `${visibleListings.length} ${detail.noun}${search ? ` para ${search}` : " disponibles"}`}</h1>}
 
           {visibleListings.length > 0 ? (
-            <div className="listing-grid">
+            <div className={`listing-grid ${activeCategory === "Depas" ? "depa-listing-grid" : ""}`}>
               {visibleListings.map((listing) => {
                 const images = listingImages(listing);
                 const imageIndex = Math.min(galleryIndexes[listing.id] ?? 0, images.length - 1);
                 return (
-                <article key={listing.id} className="listing-card" onClick={() => openListing(listing)}>
+                <article key={listing.id} className={`listing-card ${activeCategory === "Depas" ? "depa-card" : ""}`} onClick={() => openListing(listing)}>
                   <div className="listing-image-wrap">
                     <img src={imageUrl(images[imageIndex] ?? listing.image, 900)} alt={`${listing.title}, fotografía ${imageIndex + 1}`} className="listing-image" />
                     {listing.badge && <span className="listing-badge">{listing.badge}</span>}
@@ -390,16 +938,35 @@ export default function Home() {
                       {images.map((_, index) => <button key={`${listing.id}-${index}`} className={index === imageIndex ? "active" : ""} onClick={(event) => { event.stopPropagation(); setGalleryIndexes((current) => ({ ...current, [listing.id]: index })); }} aria-label={`Ver fotografía ${index + 1}`} aria-current={index === imageIndex ? "true" : undefined} />)}
                     </div>}
                   </div>
-                  <div className="listing-copy">
-                    <div className="card-title-row"><h2>{listing.title}</h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
-                    <p className="listing-location">{listing.location}</p>
-                    <p className="listing-meta">{listing.meta}</p>
-                    <p className="listing-dates">{dateLabel}</p>
-                    <div className="price-row">
-                      <div><p><strong>{money.format(listing.price)}</strong> <span>{listing.priceLabel}</span></p><span className="cancellation-tag">Contacto directo</span></div>
-                      <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`}><WhatsappIcon /></a>
-                    </div>
-                  </div>
+                  {activeCategory === "Depas" ? (() => {
+                    const details = depaDetails(listing);
+                    return <div className="listing-copy depa-copy">
+                      <div className="depa-title-row"><h2>{listing.title}</h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
+                      <p className="depa-status"><strong>{details.delivery}</strong><span>·</span>{details.availability}</p>
+                      <p className="depa-rent"><span>Alquiler desde</span><strong>{money.format(listing.price)}</strong></p>
+                      <p className="depa-address">{details.address}</p>
+                      <div className="depa-specs" aria-label="Resumen del departamento">
+                        <span>{details.units} {details.units === 1 ? "unidad" : "unidades"}</span>
+                        <span>{details.areaTotal}</span>
+                        <span>{details.areaCovered}</span>
+                        <span>{rangeLabel(details.bedroomsMin, details.bedroomsMax, "dorm.", "dorm.")}</span>
+                        <span>{rangeLabel(details.bathroomsMin, details.bathroomsMax, "baño", "baños")}</span>
+                      </div>
+                      <div className="depa-card-footer">
+                        <div className="depa-feature-preview">{details.features.slice(0, 3).map((feature) => <span key={feature}>{feature}</span>)}</div>
+                        <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`}><WhatsappIcon /></a>
+                      </div>
+                    </div>;
+                  })() : <div className="listing-copy">
+                      <div className="card-title-row"><h2>{listing.title}</h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
+                      <p className="listing-location">{listing.location}</p>
+                      <p className="listing-meta">{listing.meta}</p>
+                      <p className="listing-dates">{dateLabel}</p>
+                      <div className="price-row">
+                        <div><p><strong>{money.format(listing.price)}</strong> <span>{listing.priceLabel}</span></p><span className="cancellation-tag">Contacto directo</span></div>
+                        <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`}><WhatsappIcon /></a>
+                      </div>
+                    </div>}
                 </article>
                 );
               })}
@@ -430,8 +997,17 @@ export default function Home() {
       {showFilters && (
         <Modal onClose={() => setShowFilters(false)} className="filters-modal">
           <div className="modal-header"><div><span className="modal-kicker">Personaliza tu búsqueda</span><h2>Filtros</h2></div><button className="close-button" onClick={() => setShowFilters(false)} aria-label="Cerrar filtros">×</button></div>
-          <div className="filter-section"><h3>Presupuesto máximo</h3><div className="price-input"><span>S/</span><input type="number" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="Sin límite" /></div></div>
           <div className="filter-section"><h3>Ubicación</h3><input className="full-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Distrito o ciudad" /></div>
+          {activeCategory === "Depas" ? <DepaFilterControls
+            bedrooms={bedrooms}
+            minimumPrice={minPrice}
+            maximumPrice={maxPrice}
+            features={selectedDepaFeatures}
+            onBedroomsChange={setBedrooms}
+            onMinimumPriceChange={setMinPrice}
+            onMaximumPriceChange={setMaxPrice}
+            onToggleFeature={toggleDepaFeature}
+          /> : <div className="filter-section"><h3>Presupuesto máximo</h3><div className="price-input"><span>S/</span><input type="number" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="Sin límite" /></div></div>}
           {activeCategory === "Transporte" && <div className="filter-section"><h3>Tipo de servicio</h3><div className="modal-options">{["Todos", "Mudanza", "Corporativo"].map((item) => <button key={item} className={service === item ? "selected" : ""} onClick={() => setService(item)}>{item}</button>)}</div></div>}
           <div className="modal-footer"><button className="text-action" onClick={resetFilters}>Limpiar todo</button><button className="dark-button" onClick={() => setShowFilters(false)}>Mostrar {visibleListings.length} resultados</button></div>
         </Modal>
@@ -472,7 +1048,25 @@ export default function Home() {
               </div>
             </>}
           </div>
-          <div className="detail-body"><div className="detail-title"><div><span className="modal-kicker">{selectedListing.category}</span><h2>{selectedListing.title}</h2></div><strong>★ {selectedListing.rating.toFixed(1)} ({selectedListing.reviews})</strong></div><p className="detail-location">{selectedListing.location}</p><p className="detail-description">{selectedListing.description}</p><div className="detail-benefits"><span>✓ Publicación verificada</span><span>✓ Trato directo</span><span>✓ Sin comisiones</span></div><div className="detail-footer"><div><small>Precio</small><strong>{money.format(selectedListing.price)} <em>{selectedListing.priceLabel}</em></strong></div><a className="primary-button" href={whatsappLink(selectedListing)} onClick={() => trackInquiry(selectedListing.id)} target="_blank" rel="noreferrer">Contactar por WhatsApp <Icon>↗</Icon></a></div></div>
+          <div className="detail-body">
+            <div className="detail-title"><div><span className="modal-kicker">{selectedListing.category}</span><h2>{selectedListing.title}</h2></div><strong>★ {selectedListing.rating.toFixed(1)} ({selectedListing.reviews})</strong></div>
+            <p className="detail-location">{selectedListing.category === "Depas" ? depaDetails(selectedListing).address : selectedListing.location}</p>
+            <p className="detail-description">{selectedListing.description}</p>
+            {selectedListing.category === "Depas" && (() => {
+              const details = depaDetails(selectedListing);
+              return <><div className="detail-depa-status"><strong>{details.delivery}</strong><span>· {details.availability}</span></div><div className="detail-depa-specs"><span><strong>{details.units}</strong><small>unidades</small></span><span><strong>{details.areaTotal}</strong><small>área total</small></span><span><strong>{details.areaCovered}</strong><small>área techada</small></span><span><strong>{rangeLabel(details.bedroomsMin, details.bedroomsMax, "dorm.", "dorm.")}</strong><small>dormitorios</small></span><span><strong>{rangeLabel(details.bathroomsMin, details.bathroomsMax, "baño", "baños")}</strong><small>baños</small></span></div><div className="detail-depa-features">{details.features.map((feature) => <span key={feature}>✓ {feature}</span>)}</div></>;
+            })()}
+            {selectedListing.category === "Airbnb" && <div className="detail-stay-panel">
+              <div className="detail-stay-dates">
+                <span><small>Llegada</small><strong>{formatDetailDate(checkIn)}</strong></span>
+                <span><small>Salida</small><strong>{formatDetailDate(checkOut)}</strong></span>
+              </div>
+              <div className="detail-stay-guests"><span><small>Huéspedes</small><strong>{guestCount} {guestCount === 1 ? "huésped" : "huéspedes"}</strong></span><span>{airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span></div>
+              <div className="detail-stay-total"><span>{money.format(selectedListing.price)} × {airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span><strong>{money.format(selectedListing.price * airbnbNights)}</strong></div>
+            </div>}
+            <div className="detail-benefits"><span>✓ Publicación verificada</span><span>✓ Trato directo</span><span>✓ Sin comisiones</span></div>
+            <div className="detail-footer"><div><small>{selectedListing.category === "Depas" ? "Alquiler desde" : selectedListing.category === "Airbnb" ? `Total por ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}` : "Precio"}</small><strong>{selectedListing.category === "Airbnb" ? money.format(selectedListing.price * airbnbNights) : money.format(selectedListing.price)} {selectedListing.category !== "Airbnb" && <em>{selectedListing.priceLabel}</em>}</strong></div><a className="primary-button" href={whatsappLink(selectedListing, { checkIn, checkOut, guests: guestCount })} onClick={() => trackInquiry(selectedListing.id)} target="_blank" rel="noreferrer">{selectedListing.category === "Airbnb" ? "Consultar disponibilidad" : "Contactar por WhatsApp"} <Icon>↗</Icon></a></div>
+          </div>
         </Modal>
       )}
     </div>
@@ -560,6 +1154,8 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: Auth
 
 function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { category: Category; defaultOwnerName: string; onClose: () => void; onCreated: (listing: Listing) => void }) {
   const [form, setForm] = useState({ title: "", location: "", price: "", description: "", ownerName: defaultOwnerName, ownerWhatsApp: "" });
+  const [depaForm, setDepaForm] = useState({ address: "", units: "1", areaTotal: "", areaCovered: "", bedroomsMin: "1", bedroomsMax: "1", bathroomsMin: "1", bathroomsMax: "1", delivery: "Disponible ahora", availability: "Contrato de 6 a 12 meses" });
+  const [depaPublishFeatures, setDepaPublishFeatures] = useState<DepaFeature[]>([]);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
@@ -581,7 +1177,23 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
       const response = await fetch("/api/listings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, image, category, price: Number(form.price), priceLabel: categoryDetails[category].priceLabel }),
+        body: JSON.stringify({
+          ...form,
+          image,
+          category,
+          price: Number(form.price),
+          priceLabel: categoryDetails[category].priceLabel,
+          details: category === "Depas" ? {
+            ...depaForm,
+            address: depaForm.address || form.location,
+            units: Number(depaForm.units),
+            bedroomsMin: Number(depaForm.bedroomsMin),
+            bedroomsMax: Number(depaForm.bedroomsMax),
+            bathroomsMin: Number(depaForm.bathroomsMin),
+            bathroomsMax: Number(depaForm.bathroomsMax),
+            features: depaPublishFeatures,
+          } : undefined,
+        }),
       });
       const payload = (await response.json()) as { listing?: Listing; error?: string };
       if (!response.ok || !payload.listing) throw new Error(payload.error ?? "No se pudo guardar la publicación");
@@ -599,6 +1211,7 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
       <p className="modal-lead">Completa los datos esenciales. Tus clientes podrán contactarte directamente.</p>
       <form onSubmit={submit}>
         <div className="form-grid"><label>Título<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ej. Depa luminoso en Barranco" /></label><label>Ubicación<input required value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Distrito, ciudad" /></label><label>Precio en soles<input required min="1" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label><label>Tu nombre<input required value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label></div>
+        {category === "Depas" && <fieldset className="publish-depa-fields"><legend>Datos del departamento</legend><div className="form-grid"><label>Dirección exacta<input required value={depaForm.address} onChange={(event) => setDepaForm({ ...depaForm, address: event.target.value })} placeholder="Av., calle y número" /></label><label>Número de unidades<input required min="1" type="number" value={depaForm.units} onChange={(event) => setDepaForm({ ...depaForm, units: event.target.value })} /></label><label>Área total<input required value={depaForm.areaTotal} onChange={(event) => setDepaForm({ ...depaForm, areaTotal: event.target.value })} placeholder="Ej. 53 a 60 m² tot." /></label><label>Área techada<input required value={depaForm.areaCovered} onChange={(event) => setDepaForm({ ...depaForm, areaCovered: event.target.value })} placeholder="Ej. 53 a 60 m² techada" /></label><label>Dormitorios mínimos<input required min="1" max="10" type="number" value={depaForm.bedroomsMin} onChange={(event) => setDepaForm({ ...depaForm, bedroomsMin: event.target.value })} /></label><label>Dormitorios máximos<input required min={depaForm.bedroomsMin || "1"} max="10" type="number" value={depaForm.bedroomsMax} onChange={(event) => setDepaForm({ ...depaForm, bedroomsMax: event.target.value })} /></label><label>Baños mínimos<input required min="1" max="10" type="number" value={depaForm.bathroomsMin} onChange={(event) => setDepaForm({ ...depaForm, bathroomsMin: event.target.value })} /></label><label>Baños máximos<input required min={depaForm.bathroomsMin || "1"} max="10" type="number" value={depaForm.bathroomsMax} onChange={(event) => setDepaForm({ ...depaForm, bathroomsMax: event.target.value })} /></label><label>Entrega<input required value={depaForm.delivery} onChange={(event) => setDepaForm({ ...depaForm, delivery: event.target.value })} /></label><label>Disponibilidad o contrato<input required value={depaForm.availability} onChange={(event) => setDepaForm({ ...depaForm, availability: event.target.value })} /></label></div><span className="publish-feature-label">Características</span><div className="publish-feature-options">{depaFeatureOptions.map((feature) => { const selected = depaPublishFeatures.includes(feature); return <button type="button" key={feature} className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => setDepaPublishFeatures((current) => current.includes(feature) ? current.filter((item) => item !== feature) : [...current, feature])}>{selected ? "✓" : "+"} {feature}</button>; })}</div></fieldset>}
         <label>Descripción<textarea required rows={4} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Cuenta qué hace especial a tu anuncio…" /></label>
         <label className="image-upload">Fotografía principal<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /><span>{imageFile ? `✓ ${imageFile.name}` : "Seleccionar imagen · máximo 8 MB"}</span></label>
         <label>WhatsApp de contacto<input required value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>

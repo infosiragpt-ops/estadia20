@@ -1,0 +1,1 @@
+ALTER TABLE `listings` ADD `details_json` text DEFAULT '{}' NOT NULL;

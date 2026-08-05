@@ -1,4 +1,4 @@
-# Despliegue VPS de Estadia20
+# Despliegue VPS de roomies20
 
 Esta variante conserva el frontend de `roomies20` y lo ejecuta en un VPS Ubuntu sin depender de Cloudflare. Incluye:
 
@@ -33,7 +33,30 @@ systemctl daemon-reload
 systemctl enable --now estadia20.service
 nginx -t
 systemctl reload nginx
-certbot --nginx -d estadia20.com -d www.estadia20.com --redirect
+certbot --nginx --cert-name estadia20.com \
+  -d llaves365.com -d www.llaves365.com \
+  -d estadia20.com -d www.estadia20.com \
+  --expand --redirect
 ```
 
 El endpoint `GET /api/health` confirma que la API y la base de datos están disponibles.
+
+## Despliegue automático desde GitHub
+
+El workflow `.github/workflows/deploy-production.yml` despliega automáticamente cada cambio que llega a la rama `main`. También se puede ejecutar manualmente desde GitHub Actions.
+
+El servidor usa un usuario SSH exclusivo y sin acceso general a `sudo`. Ese usuario solo puede ejecutar:
+
+```bash
+sudo /usr/local/sbin/estadia20-deploy /tmp/estadia20-release.tgz
+```
+
+Instala `vps/deploy-release.sh` en `/usr/local/sbin/estadia20-deploy`, propiedad de `root` y con permisos `0755`. El script valida el paquete, activa la nueva versión, comprueba la API y restaura automáticamente la versión anterior si algo falla.
+
+Configura estos secretos en el repositorio de GitHub:
+
+- `VPS_HOST`: dirección del VPS;
+- `VPS_PORT`: puerto SSH, normalmente `22`;
+- `VPS_USER`: usuario SSH limitado de despliegue;
+- `VPS_SSH_KEY`: clave privada exclusiva de GitHub Actions;
+- `VPS_KNOWN_HOSTS`: huella SSH obtenida de forma confiable.

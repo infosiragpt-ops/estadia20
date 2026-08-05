@@ -1,5 +1,30 @@
 export type Category = "Roomies" | "Depas" | "Airbnb" | "Transporte";
 
+export const depaFeatureOptions = [
+  "Amoblado",
+  "Permite mascotas",
+  "Área de lavandería",
+  "Balcón",
+  "Terraza",
+  "Ascensor",
+] as const;
+
+export type DepaFeature = typeof depaFeatureOptions[number];
+
+export type DepaDetails = {
+  delivery: string;
+  availability: string;
+  address: string;
+  units: number;
+  areaTotal: string;
+  areaCovered: string;
+  bedroomsMin: number;
+  bedroomsMax: number;
+  bathroomsMin: number;
+  bathroomsMax: number;
+  features: DepaFeature[];
+};
+
 export type Listing = {
   id: number;
   category: Category;
@@ -17,6 +42,7 @@ export type Listing = {
   ownerName: string;
   ownerWhatsApp: string;
   service?: string;
+  details?: DepaDetails;
 };
 
 const image = (id: string) => `https://images.unsplash.com/${id}`;
@@ -35,16 +61,16 @@ export const demoListings: Listing[] = [
     id: 4, category: "Roomies", title: "Habitación privada con escritorio", location: "Jesús María, Lima", description: "Ideal para estudiar o trabajar desde casa. Cocina y lavandería compartidas, edificio seguro.", image: image("photo-1524758631624-e2822e304c36"), price: 720, priceLabel: "por mes", rating: 4.9, reviews: 21, meta: "1 cama · 1 baño · Escritorio", ownerName: "Luis", ownerWhatsApp: "51987654321",
   },
   {
-    id: 11, category: "Depas", title: "Depa con terraza y mucha luz", location: "Miraflores, Lima", description: "Departamento de dos dormitorios con terraza, cocina equipada y una vista abierta al barrio.", image: image("photo-1600607687939-ce8a6c25118c"), gallery: [image("photo-1600607687939-ce8a6c25118c"), image("photo-1600566753086-00f18fb6b3ea")], price: 2850, priceLabel: "por mes", rating: 4.9, reviews: 28, meta: "2 habitaciones · 2 baños · Contrato 12 meses", badge: "Nuevo", ownerName: "Valeria", ownerWhatsApp: "51999888777",
+    id: 11, category: "Depas", title: "Edificios en Miraflores", location: "Miraflores, Lima", description: "Proyecto residencial de entrega inmediata con departamentos de uno y dos dormitorios, áreas comunes y conexión directa con el centro de Miraflores.", image: image("photo-1600607687939-ce8a6c25118c"), gallery: [image("photo-1600607687939-ce8a6c25118c"), image("photo-1600566753086-00f18fb6b3ea")], price: 2909, priceLabel: "por mes", rating: 4.9, reviews: 28, meta: "1 a 2 dormitorios · 1 a 2 baños · 53 a 60 m²", badge: "Entrega inmediata", ownerName: "Valeria", ownerWhatsApp: "51999888777", details: { delivery: "Entrega inmediata", availability: "Entrega Inmediata", address: "Av. Ricardo Palma 251, Miraflores, Lima", units: 280, areaTotal: "53 a 60 m² tot.", areaCovered: "53 a 60 m² techada", bedroomsMin: 1, bedroomsMax: 2, bathroomsMin: 1, bathroomsMax: 2, features: ["Amoblado", "Permite mascotas", "Área de lavandería", "Balcón", "Terraza", "Ascensor"] },
   },
   {
-    id: 12, category: "Depas", title: "Moderno, amoblado y listo", location: "Surco, Lima", description: "Un departamento práctico y contemporáneo para instalarte sin complicaciones, cerca de todo.", image: image("photo-1600566753190-17f0baa2a6c3"), price: 3100, priceLabel: "por mes", rating: 5, reviews: 15, meta: "2 habitaciones · 2 baños · Contrato 6–12 meses", ownerName: "Diego", ownerWhatsApp: "51991112233",
+    id: 12, category: "Depas", title: "Residencial Parque Surco", location: "Santiago de Surco, Lima", description: "Departamentos contemporáneos con distribución eficiente, espacios sociales y acceso rápido a parques, colegios y comercios.", image: image("photo-1600566753190-17f0baa2a6c3"), gallery: [image("photo-1600566753190-17f0baa2a6c3"), image("photo-1600607687920-4e2a09cf159d")], price: 3100, priceLabel: "por mes", rating: 5, reviews: 15, meta: "2 a 3 dormitorios · 2 baños · 72 a 96 m²", badge: "Listo para mudarte", ownerName: "Diego", ownerWhatsApp: "51991112233", details: { delivery: "Entrega inmediata", availability: "Últimas unidades", address: "Av. Caminos del Inca 1245, Santiago de Surco, Lima", units: 64, areaTotal: "72 a 96 m² tot.", areaCovered: "68 a 90 m² techada", bedroomsMin: 2, bedroomsMax: 3, bathroomsMin: 2, bathroomsMax: 2, features: ["Amoblado", "Permite mascotas", "Área de lavandería", "Balcón", "Ascensor"] },
   },
   {
-    id: 13, category: "Depas", title: "Depa familiar cerca al malecón", location: "San Isidro, Lima", description: "Espacios generosos, buena luz y seguridad 24/7 para una estadía de largo plazo.", image: image("photo-1600585154340-be6161a56a0c"), price: 3600, priceLabel: "por mes", rating: 4.8, reviews: 11, meta: "3 habitaciones · 2 baños · Contrato 12 meses", ownerName: "Patricia", ownerWhatsApp: "51990001122",
+    id: 13, category: "Depas", title: "Vive frente al parque", location: "San Isidro, Lima", description: "Un edificio residencial de baja densidad con ambientes amplios, iluminación natural y seguridad permanente.", image: image("photo-1600585154340-be6161a56a0c"), price: 3600, priceLabel: "por mes", rating: 4.8, reviews: 11, meta: "3 dormitorios · 2 a 3 baños · 105 a 126 m²", ownerName: "Patricia", ownerWhatsApp: "51990001122", details: { delivery: "Disponible ahora", availability: "Contrato de 12 meses", address: "Calle Los Laureles 410, San Isidro, Lima", units: 32, areaTotal: "105 a 126 m² tot.", areaCovered: "98 a 118 m² techada", bedroomsMin: 3, bedroomsMax: 3, bathroomsMin: 2, bathroomsMax: 3, features: ["Permite mascotas", "Área de lavandería", "Balcón", "Terraza", "Ascensor"] },
   },
   {
-    id: 14, category: "Depas", title: "El depa que se adapta a ti", location: "Pueblo Libre, Lima", description: "Departamento silencioso con balcón, cocina abierta y condiciones flexibles de contrato.", image: image("photo-1600607687920-4e2a09cf159d"), price: 2250, priceLabel: "por mes", rating: 4.7, reviews: 8, meta: "2 habitaciones · 1 baño · Contrato 6 meses", ownerName: "Renzo", ownerWhatsApp: "51988889999",
+    id: 14, category: "Depas", title: "Departamentos en Pueblo Libre", location: "Pueblo Libre, Lima", description: "Departamentos funcionales con cocina abierta, balcón y contratos desde seis meses en una zona residencial conectada.", image: image("photo-1600607687920-4e2a09cf159d"), price: 2250, priceLabel: "por mes", rating: 4.7, reviews: 8, meta: "1 a 2 dormitorios · 1 baño · 46 a 68 m²", ownerName: "Renzo", ownerWhatsApp: "51988889999", details: { delivery: "Disponible ahora", availability: "Contrato desde 6 meses", address: "Av. Brasil 1850, Pueblo Libre, Lima", units: 90, areaTotal: "46 a 68 m² tot.", areaCovered: "44 a 64 m² techada", bedroomsMin: 1, bedroomsMax: 2, bathroomsMin: 1, bathroomsMax: 1, features: ["Permite mascotas", "Área de lavandería", "Balcón", "Ascensor"] },
   },
   {
     id: 21, category: "Airbnb", title: "Departamento con diseño en Barranco", location: "Barranco, Lima", description: "Departamento con interiores cálidos, detalles locales y todo lo necesario para una escapada con personalidad.", image: image("photo-1600607687939-ce8a6c25118c"), price: 240, priceLabel: "por noche", rating: 4.98, reviews: 46, meta: "2 huéspedes · 1 habitación · Wifi", badge: "Favorito entre huéspedes", ownerName: "Sofía", ownerWhatsApp: "51999888777",

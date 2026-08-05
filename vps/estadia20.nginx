@@ -1,7 +1,7 @@
 server {
     listen 80;
     listen [::]:80;
-    server_name estadia20.com www.estadia20.com;
+    server_name llaves365.com www.llaves365.com estadia20.com www.estadia20.com;
 
     root /opt/estadia20/public;
     index index.html;

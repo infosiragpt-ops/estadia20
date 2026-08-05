@@ -17,6 +17,7 @@ const listingsTableSql = `CREATE TABLE IF NOT EXISTS listings (
   owner_name TEXT NOT NULL,
   owner_whatsapp TEXT NOT NULL,
   service TEXT,
+  details_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`;
 
@@ -45,5 +46,9 @@ export async function ensureDatabase() {
     rawDb.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_favorites_visitor_listing ON favorites (visitor_id, listing_id)"),
     rawDb.prepare("CREATE INDEX IF NOT EXISTS idx_inquiries_listing_created_at ON inquiries (listing_id, created_at)"),
   ]);
+  const listingColumns = await rawDb.prepare("PRAGMA table_info(listings)").all<{ name: string }>();
+  if (!listingColumns.results.some((column: { name: string }) => column.name === "details_json")) {
+    await rawDb.prepare("ALTER TABLE listings ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'").run();
+  }
   await rawDb.prepare("PRAGMA optimize").run();
 }

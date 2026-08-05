@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small production API for the estadia20 VPS deployment."""
+"""Small production API for the roomies20 VPS deployment."""
 
 from __future__ import annotations
 
@@ -41,6 +41,82 @@ IMAGE_TYPES = {
     "image/webp": "webp",
     "image/gif": "gif",
 }
+DEPA_FEATURES = {
+    "Amoblado",
+    "Permite mascotas",
+    "Área de lavandería",
+    "Balcón",
+    "Terraza",
+    "Ascensor",
+}
+DEPA_SEED_LISTINGS = (
+    {
+        "title": "Edificios en Miraflores",
+        "location": "Miraflores, Lima",
+        "description": "Proyecto residencial de entrega inmediata con departamentos de uno y dos dormitorios, áreas comunes y conexión directa con el centro de Miraflores.",
+        "image": "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c",
+        "gallery": [
+            "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c",
+            "https://images.unsplash.com/photo-1600566753086-00f18fb6b3ea",
+        ],
+        "price": 2909,
+        "rating": 4.9,
+        "reviews": 28,
+        "meta": "1 a 2 dormitorios · 1 a 2 baños · 53 a 60 m²",
+        "badge": "Entrega inmediata",
+        "owner_name": "Valeria",
+        "owner_whatsapp": "51999888777",
+        "details": {"delivery": "Entrega inmediata", "availability": "Entrega Inmediata", "address": "Av. Ricardo Palma 251, Miraflores, Lima", "units": 280, "areaTotal": "53 a 60 m² tot.", "areaCovered": "53 a 60 m² techada", "bedroomsMin": 1, "bedroomsMax": 2, "bathroomsMin": 1, "bathroomsMax": 2, "features": ["Amoblado", "Permite mascotas", "Área de lavandería", "Balcón", "Terraza", "Ascensor"]},
+    },
+    {
+        "title": "Residencial Parque Surco",
+        "location": "Santiago de Surco, Lima",
+        "description": "Departamentos contemporáneos con distribución eficiente, espacios sociales y acceso rápido a parques, colegios y comercios.",
+        "image": "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3",
+        "gallery": [
+            "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3",
+            "https://images.unsplash.com/photo-1600607687920-4e2a09cf159d",
+        ],
+        "price": 3100,
+        "rating": 5,
+        "reviews": 15,
+        "meta": "2 a 3 dormitorios · 2 baños · 72 a 96 m²",
+        "badge": "Listo para mudarte",
+        "owner_name": "Diego",
+        "owner_whatsapp": "51991112233",
+        "details": {"delivery": "Entrega inmediata", "availability": "Últimas unidades", "address": "Av. Caminos del Inca 1245, Santiago de Surco, Lima", "units": 64, "areaTotal": "72 a 96 m² tot.", "areaCovered": "68 a 90 m² techada", "bedroomsMin": 2, "bedroomsMax": 3, "bathroomsMin": 2, "bathroomsMax": 2, "features": ["Amoblado", "Permite mascotas", "Área de lavandería", "Balcón", "Ascensor"]},
+    },
+    {
+        "title": "Vive frente al parque",
+        "location": "San Isidro, Lima",
+        "description": "Un edificio residencial de baja densidad con ambientes amplios, iluminación natural y seguridad permanente.",
+        "image": "https://images.unsplash.com/photo-1600585154340-be6161a56a0c",
+        "gallery": ["https://images.unsplash.com/photo-1600585154340-be6161a56a0c"],
+        "price": 3600,
+        "rating": 4.8,
+        "reviews": 11,
+        "meta": "3 dormitorios · 2 a 3 baños · 105 a 126 m²",
+        "badge": None,
+        "owner_name": "Patricia",
+        "owner_whatsapp": "51990001122",
+        "details": {"delivery": "Disponible ahora", "availability": "Contrato de 12 meses", "address": "Calle Los Laureles 410, San Isidro, Lima", "units": 32, "areaTotal": "105 a 126 m² tot.", "areaCovered": "98 a 118 m² techada", "bedroomsMin": 3, "bedroomsMax": 3, "bathroomsMin": 2, "bathroomsMax": 3, "features": ["Permite mascotas", "Área de lavandería", "Balcón", "Terraza", "Ascensor"]},
+    },
+    {
+        "title": "Departamentos en Pueblo Libre",
+        "location": "Pueblo Libre, Lima",
+        "description": "Departamentos funcionales con cocina abierta, balcón y contratos desde seis meses en una zona residencial conectada.",
+        "image": "https://images.unsplash.com/photo-1600607687920-4e2a09cf159d",
+        "gallery": ["https://images.unsplash.com/photo-1600607687920-4e2a09cf159d"],
+        "price": 2250,
+        "rating": 4.7,
+        "reviews": 8,
+        "meta": "1 a 2 dormitorios · 1 baño · 46 a 68 m²",
+        "badge": None,
+        "owner_name": "Renzo",
+        "owner_whatsapp": "51988889999",
+        "details": {"delivery": "Disponible ahora", "availability": "Contrato desde 6 meses", "address": "Av. Brasil 1850, Pueblo Libre, Lima", "units": 90, "areaTotal": "46 a 68 m² tot.", "areaCovered": "44 a 64 m² techada", "bedroomsMin": 1, "bedroomsMax": 2, "bathroomsMin": 1, "bathroomsMax": 1, "features": ["Permite mascotas", "Área de lavandería", "Balcón", "Ascensor"]},
+    },
+)
 
 
 def connect() -> sqlite3.Connection:
@@ -90,6 +166,7 @@ def initialize_database() -> None:
               owner_name TEXT NOT NULL,
               owner_whatsapp TEXT NOT NULL,
               service TEXT,
+              details_json TEXT NOT NULL DEFAULT '{}',
               user_id INTEGER REFERENCES users(id),
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -120,6 +197,41 @@ def initialize_database() -> None:
         if "user_id" not in listing_columns:
             database.execute(
                 "ALTER TABLE listings ADD COLUMN user_id INTEGER REFERENCES users(id)"
+            )
+        if "details_json" not in listing_columns:
+            database.execute(
+                "ALTER TABLE listings ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        depa_count = database.execute(
+            "SELECT COUNT(*) FROM listings WHERE category = 'Depas'"
+        ).fetchone()[0]
+        if depa_count == 0:
+            database.executemany(
+                """
+                INSERT INTO listings
+                  (category, title, location, description, image, gallery, price,
+                   price_label, rating, reviews, meta, badge, owner_name,
+                   owner_whatsapp, details_json)
+                VALUES ('Depas', ?, ?, ?, ?, ?, ?, 'por mes', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        listing["title"],
+                        listing["location"],
+                        listing["description"],
+                        listing["image"],
+                        json.dumps(listing["gallery"], ensure_ascii=False),
+                        listing["price"],
+                        listing["rating"],
+                        listing["reviews"],
+                        listing["meta"],
+                        listing["badge"],
+                        listing["owner_name"],
+                        listing["owner_whatsapp"],
+                        json.dumps(listing["details"], ensure_ascii=False),
+                    )
+                    for listing in reversed(DEPA_SEED_LISTINGS)
+                ],
             )
 
 
@@ -159,6 +271,10 @@ def listing_dict(row: sqlite3.Row) -> dict[str, object]:
         gallery = json.loads(row["gallery"])
     except (json.JSONDecodeError, TypeError):
         gallery = []
+    try:
+        details = json.loads(row["details_json"] or "{}")
+    except (json.JSONDecodeError, TypeError, IndexError):
+        details = {}
     return {
         "id": row["id"],
         "category": row["category"],
@@ -176,11 +292,47 @@ def listing_dict(row: sqlite3.Row) -> dict[str, object]:
         "ownerName": row["owner_name"],
         "ownerWhatsApp": row["owner_whatsapp"],
         "service": row["service"],
+        "details": details,
     }
 
 
-class Estadia20Handler(BaseHTTPRequestHandler):
-    server_version = "Estadia20/1.0"
+def bounded_integer(value: object, minimum: int, maximum: int, fallback: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(maximum, max(minimum, number))
+
+
+def sanitize_depa_details(value: object, location: str) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    bedrooms_min = bounded_integer(source.get("bedroomsMin"), 1, 10, 1)
+    bedrooms_max = bounded_integer(source.get("bedroomsMax"), bedrooms_min, 10, bedrooms_min)
+    bathrooms_min = bounded_integer(source.get("bathroomsMin"), 1, 10, 1)
+    bathrooms_max = bounded_integer(source.get("bathroomsMax"), bathrooms_min, 10, bathrooms_min)
+    features = source.get("features") if isinstance(source.get("features"), list) else []
+
+    def clean_text(key: str, fallback: str, limit: int = 160) -> str:
+        text = str(source.get(key, "")).strip()
+        return text[:limit] or fallback
+
+    return {
+        "delivery": clean_text("delivery", "Disponible ahora", 60),
+        "availability": clean_text("availability", "Alquiler mensual", 80),
+        "address": clean_text("address", location),
+        "units": bounded_integer(source.get("units"), 1, 10_000, 1),
+        "areaTotal": clean_text("areaTotal", "Área por consultar", 80),
+        "areaCovered": clean_text("areaCovered", "Área techada por consultar", 80),
+        "bedroomsMin": bedrooms_min,
+        "bedroomsMax": bedrooms_max,
+        "bathroomsMin": bathrooms_min,
+        "bathroomsMax": bathrooms_max,
+        "features": [feature for feature in features if feature in DEPA_FEATURES],
+    }
+
+
+class Roomies20Handler(BaseHTTPRequestHandler):
+    server_version = "roomies20/1.0"
 
     def log_message(self, format_string: str, *args: object) -> None:
         print(f"{self.address_string()} - {format_string % args}", flush=True)
@@ -476,13 +628,15 @@ class Estadia20Handler(BaseHTTPRequestHandler):
         ):
             self.send_json({"error": "La fotografía no es válida."}, HTTPStatus.BAD_REQUEST)
             return
+        details = sanitize_depa_details(payload.get("details"), location) if category == "Depas" else {}
         with connect() as database:
             cursor = database.execute(
                 """
                 INSERT INTO listings
                   (category, title, location, description, image, gallery, price,
-                   price_label, rating, reviews, meta, owner_name, owner_whatsapp, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 5, 0, ?, ?, ?, ?)
+                   price_label, rating, reviews, meta, owner_name, owner_whatsapp,
+                   details_json, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 5, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     category,
@@ -496,6 +650,7 @@ class Estadia20Handler(BaseHTTPRequestHandler):
                     "Publicación nueva · Contacto directo",
                     owner_name,
                     owner_whatsapp,
+                    json.dumps(details, ensure_ascii=False),
                     user["id"],
                 ),
             )
@@ -614,8 +769,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=3011)
     arguments = parser.parse_args()
     initialize_database()
-    server = ThreadingHTTPServer((arguments.host, arguments.port), Estadia20Handler)
-    print(f"Estadia20 API listening on {arguments.host}:{arguments.port}", flush=True)
+    server = ThreadingHTTPServer((arguments.host, arguments.port), Roomies20Handler)
+    print(f"roomies20 API listening on {arguments.host}:{arguments.port}", flush=True)
     server.serve_forever()
 
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Estadia20 application API
+Description=roomies20 application API
 After=network.target
 
 [Service]

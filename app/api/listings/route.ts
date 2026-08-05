@@ -2,18 +2,26 @@ import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { ensureDatabase } from "../../../db/ensure";
 import { listings } from "../../../db/schema";
-import { demoListings, type Category } from "../../data";
+import { demoListings, type Category, type DepaDetails } from "../../data";
 
 const categories = new Set<Category>(["Roomies", "Depas", "Airbnb", "Transporte"]);
 
 function serializeListing(row: typeof listings.$inferSelect) {
   let gallery: string[] = [];
+  let details: DepaDetails | undefined;
   try {
     gallery = JSON.parse(row.gallery) as string[];
   } catch {
     gallery = [];
   }
-  return { ...row, gallery };
+  try {
+    details = JSON.parse(row.detailsJson) as DepaDetails;
+  } catch {
+    details = undefined;
+  }
+  const { detailsJson: _detailsJson, ...listing } = row;
+  void _detailsJson;
+  return { ...listing, gallery, details };
 }
 
 function routeError(error: unknown) {
@@ -48,6 +56,7 @@ export async function POST(request: Request) {
       priceLabel: string;
       ownerName: string;
       ownerWhatsApp: string;
+      details: DepaDetails;
     }>;
     const category = payload.category;
     const title = payload.title?.trim() ?? "";
@@ -65,7 +74,7 @@ export async function POST(request: Request) {
     }
     await ensureDatabase();
     const db = getDb();
-    const [created] = await db.insert(listings).values({ category, title, location, description, image, gallery: JSON.stringify([image]), price: Math.round(price), priceLabel: payload.priceLabel?.trim() || "por servicio", rating: 5, reviews: 0, meta: "Publicación nueva · Contacto directo", ownerName, ownerWhatsApp }).returning();
+    const [created] = await db.insert(listings).values({ category, title, location, description, image, gallery: JSON.stringify([image]), price: Math.round(price), priceLabel: payload.priceLabel?.trim() || "por servicio", rating: 5, reviews: 0, meta: "Publicación nueva · Contacto directo", ownerName, ownerWhatsApp, detailsJson: JSON.stringify(category === "Depas" && payload.details ? payload.details : {}) }).returning();
     return Response.json({ listing: serializeListing(created) }, { status: 201 });
   } catch (error) {
     return Response.json({ error: routeError(error) }, { status: 500 });

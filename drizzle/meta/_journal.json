@@ -22,6 +22,13 @@
       "when": 1785742163466,
       "tag": "0002_oval_living_lightning",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785962390137,
+      "tag": "0003_sleepy_warbound",
+      "breakpoints": true
     }
   ]
 }

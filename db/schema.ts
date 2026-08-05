@@ -18,6 +18,7 @@ export const listings = sqliteTable("listings", {
   ownerName: text("owner_name").notNull(),
   ownerWhatsApp: text("owner_whatsapp").notNull(),
   service: text("service"),
+  detailsJson: text("details_json").notNull().default("{}"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => ({
   categoryCreatedAtIdx: index("idx_listings_category_created_at").on(table.category, table.createdAt),
