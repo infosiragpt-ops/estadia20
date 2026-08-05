@@ -225,9 +225,11 @@ button { cursor: pointer; }
 .price-row strong { color: var(--ink); font-size: 14px; text-decoration: underline; text-underline-offset: 2px; }
 .price-row p span { color: var(--muted); }
 .cancellation-tag { padding: 4px 6px; border-radius: 5px; background: #f1f1f1; color: #777; font-size: 9px; font-weight: 700; }
-.whatsapp-card { width: 45px; height: 45px; flex: 0 0 auto; display: grid; place-items: center; padding: 6px; border: 0; border-radius: 10px; background: #25d366; color: #fff; text-decoration: none; box-shadow: 0 2px 5px rgba(0,0,0,.13); transition: transform .16s ease, background .16s ease; }
-.whatsapp-card svg { width: 100%; height: 100%; }
-.whatsapp-card:hover { background: #18b951; transform: translateY(-2px); }
+.whatsapp-card { position: relative; width: 44px; height: 44px; flex: 0 0 auto; display: grid; place-items: center; padding: 9px; border: 1px solid rgba(13,124,57,.16); border-radius: 50%; background: #25d366; color: #fff; text-decoration: none; box-shadow: 0 7px 16px rgba(20,145,67,.2), 0 2px 5px rgba(0,0,0,.09), inset 0 1px 0 rgba(255,255,255,.28); transition: transform .18s ease, background-color .18s ease, box-shadow .18s ease; }
+.whatsapp-card svg { width: 25px; height: 25px; display: block; }
+.whatsapp-card:hover { background: #20c85a; transform: translateY(-2px) scale(1.03); box-shadow: 0 10px 20px rgba(20,145,67,.25), 0 3px 7px rgba(0,0,0,.1), inset 0 1px 0 rgba(255,255,255,.34); }
+.whatsapp-card:active { transform: translateY(0) scale(.97); }
+.whatsapp-card:focus-visible { outline: 0; box-shadow: 0 0 0 3px #fff, 0 0 0 6px rgba(37,211,102,.58), 0 8px 18px rgba(20,145,67,.22); }
 .dark-button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 12px 17px; border: 0; border-radius: 9px; background: var(--ink); color: #fff; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .dark-button:hover { background: #000; }
 .empty-state { display: grid; justify-items: center; padding: 80px 20px; border: 1px dashed var(--line); border-radius: 18px; text-align: center; }
@@ -302,7 +304,7 @@ button { cursor: pointer; }
 @keyframes filter-reveal { from { opacity: 0; transform: translate(-50%, -8px) scale(.985); } to { opacity: 1; transform: translateX(-50%); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .service-tab, .listing-image, .search-button, .feature-options button, .bedroom-options button { transition: none; }
+  .service-tab, .listing-image, .search-button, .feature-options button, .bedroom-options button, .whatsapp-card { transition: none; }
   .depa-filter-popover { animation: none; }
 }
 
