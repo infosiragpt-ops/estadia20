@@ -6,7 +6,7 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "depitass — encuentra tu próximo lugar",
+  title: "roomies20 — encuentra tu próximo lugar",
   description: "Roomies, departamentos, estancias y transporte con contacto directo y sin comisiones extras.",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };
