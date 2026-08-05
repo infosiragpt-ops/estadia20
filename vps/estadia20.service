@@ -1,0 +1,23 @@
+[Unit]
+Description=Estadia20 application API
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/estadia20
+Environment=PYTHONUNBUFFERED=1
+Environment=ESTADIA20_DATA_DIR=/var/lib/estadia20
+Environment=ESTADIA20_PUBLIC_DIR=/opt/estadia20/public
+ExecStart=/usr/bin/python3 /opt/estadia20/server.py --host 127.0.0.1 --port 3011
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/estadia20
+
+[Install]
+WantedBy=multi-user.target

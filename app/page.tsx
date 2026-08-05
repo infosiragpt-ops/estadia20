@@ -27,6 +27,12 @@ const plans = [
   { name: "Transporte", price: "S/ 50", detail: "por servicio al año", icon: "▰" },
 ];
 
+type AuthUser = {
+  id: number;
+  name: string;
+  email: string;
+};
+
 const money = new Intl.NumberFormat("es-PE", {
   style: "currency",
   currency: "PEN",
@@ -111,6 +117,9 @@ export default function Home() {
   const [showPlans, setShowPlans] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showPublish, setShowPublish] = useState(false);
+  const [publishAfterLogin, setPublishAfterLogin] = useState(false);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [authLoaded, setAuthLoaded] = useState(false);
   const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
   const [galleryIndexes, setGalleryIndexes] = useState<Record<number, number>>({});
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
@@ -149,6 +158,25 @@ export default function Home() {
       cancelled = true;
     };
   }, [activeCategory]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/me")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("No se pudo verificar la sesión");
+        return (await response.json()) as { user?: AuthUser | null };
+      })
+      .then((payload) => {
+        if (!cancelled) setCurrentUser(payload.user ?? null);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setAuthLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -234,6 +262,34 @@ export default function Home() {
     setService("Todos");
   }
 
+  function requestPublish() {
+    if (!currentUser) {
+      setPublishAfterLogin(true);
+      setShowLogin(true);
+      flashNotice(authLoaded ? "Inicia sesión para publicar" : "Verificando tu sesión…");
+      return;
+    }
+    setPublishAfterLogin(false);
+    setShowPublish(true);
+  }
+
+  function authenticated(user: AuthUser) {
+    setCurrentUser(user);
+    setShowLogin(false);
+    flashNotice(`Bienvenido, ${user.name}`);
+    if (publishAfterLogin) {
+      setPublishAfterLogin(false);
+      setShowPublish(true);
+    }
+  }
+
+  function loggedOut() {
+    setCurrentUser(null);
+    setPublishAfterLogin(false);
+    setShowLogin(false);
+    flashNotice("Sesión cerrada correctamente");
+  }
+
   function moveGallery(listing: Listing, direction: 1 | -1) {
     const images = listingImages(listing);
     if (images.length < 2) return;
@@ -267,7 +323,7 @@ export default function Home() {
           </nav>
 
           <div className="header-actions">
-            <button className="host-link" onClick={() => setShowPublish(true)}>Anuncia</button>
+            <button className="host-link" onClick={requestPublish}>Anuncia</button>
             <button className="globe-button" aria-label="Idioma y moneda"><GlobeIcon /></button>
             <button className="menu-trigger" aria-label="Abrir menú" aria-expanded={showMenu} onClick={() => setShowMenu((open) => !open)}>
               <span className="hamburger"><i /><i /><i /></span>
@@ -303,11 +359,11 @@ export default function Home() {
 
         {showMenu && (
           <div className="menu-popover">
-            <button className="menu-strong" onClick={() => { setShowLogin(true); setShowMenu(false); }}>Iniciar sesión</button>
+            <button className="menu-strong" onClick={() => { setShowLogin(true); setShowMenu(false); }}>{currentUser ? `Mi cuenta · ${currentUser.name}` : "Iniciar sesión"}</button>
             <button onClick={() => { setShowPlans(true); setShowMenu(false); }}>Ver planes para publicar</button>
             <button onClick={() => { setShowFilters(true); setShowMenu(false); }}>Filtros de búsqueda</button>
             <div className="menu-divider" />
-            <button onClick={() => { setShowPublish(true); setShowMenu(false); }}>Publicar un anuncio</button>
+            <button onClick={() => { requestPublish(); setShowMenu(false); }}>Publicar un anuncio</button>
             <button onClick={() => { flashNotice(`${favorites.length} favoritos guardados`); setShowMenu(false); }}>Mis favoritos <span>{favorites.length}</span></button>
             <button onClick={() => { flashNotice("Soporte directo: hola@roomies20.com"); setShowMenu(false); }}>Centro de ayuda</button>
           </div>
@@ -363,7 +419,7 @@ export default function Home() {
       <footer className="footer">
         <div className="footer-top">
           <div><strong>Asistencia</strong><button onClick={() => flashNotice("Soporte: hola@roomies20.com")}>Centro de ayuda</button><button onClick={() => flashNotice("Próximamente: seguridad y confianza")}>Seguridad</button></div>
-          <div><strong>Publica</strong><button onClick={() => setShowPublish(true)}>Anuncia tu espacio</button><button onClick={() => setShowPlans(true)}>Planes anuales</button></div>
+          <div><strong>Publica</strong><button onClick={requestPublish}>Anuncia tu espacio</button><button onClick={() => setShowPlans(true)}>Planes anuales</button></div>
           <div><strong>roomies20</strong><button onClick={() => flashNotice("Muy pronto: conoce al equipo roomies20")}>Quiénes somos</button><button onClick={() => flashNotice("Soporte: hola@roomies20.com")}>Contacto</button></div>
         </div>
         <div className="footer-bottom"><span>© 2026 roomies20 · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
@@ -385,20 +441,21 @@ export default function Home() {
         <Modal onClose={() => setShowPlans(false)} className="plans-modal">
           <div className="modal-header"><div><span className="modal-kicker">Anuncia en roomies20</span><h2>Un pago anual. Cero comisiones extras.</h2></div><button className="close-button" onClick={() => setShowPlans(false)} aria-label="Cerrar planes">×</button></div>
           <p className="modal-lead">Nosotros llevamos tráfico a la plataforma y cada consulta llega directamente a ti.</p>
-          <div className="plans-list">{plans.map((plan) => <button key={plan.name} onClick={() => { setShowPlans(false); setShowPublish(true); }}><span className="plan-icon"><Icon>{plan.icon}</Icon></span><span><strong>{plan.name}</strong><small>{plan.detail}</small></span><b>{plan.price}</b><Icon>›</Icon></button>)}</div>
+          <div className="plans-list">{plans.map((plan) => <button key={plan.name} onClick={() => { setShowPlans(false); requestPublish(); }}><span className="plan-icon"><Icon>{plan.icon}</Icon></span><span><strong>{plan.name}</strong><small>{plan.detail}</small></span><b>{plan.price}</b><Icon>›</Icon></button>)}</div>
           <div className="benefits"><span>✓ 12 meses publicado</span><span>✓ Contacto directo</span><span>✓ Sin comisión por reserva</span></div>
         </Modal>
       )}
 
       {showLogin && (
-        <Modal onClose={() => setShowLogin(false)} className="login-modal">
-          <button className="close-button login-close" onClick={() => setShowLogin(false)} aria-label="Cerrar inicio de sesión">×</button>
-          <span className="login-logo"><Icon>⌂</Icon></span><span className="modal-kicker">Tu cuenta roomies20</span><h2>Inicia sesión para continuar</h2><p>Guarda favoritos, publica anuncios y gestiona tus consultas desde un solo lugar.</p>
-          <a className="primary-button" href="/signin-with-chatgpt?return_to=%2F">Continuar con ChatGPT <Icon>→</Icon></a><small>Al continuar aceptas nuestros términos de uso.</small>
-        </Modal>
+        <AuthModal
+          user={currentUser}
+          onClose={() => { setShowLogin(false); setPublishAfterLogin(false); }}
+          onAuthenticated={authenticated}
+          onLoggedOut={loggedOut}
+        />
       )}
 
-      {showPublish && <PublishModal category={activeCategory} onClose={() => setShowPublish(false)} onCreated={(listing) => { setListingsFromDb((current) => [listing, ...current]); setActiveCategory(listing.category); setShowPublish(false); flashNotice("Tu publicación fue guardada"); }} />}
+      {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => { setListingsFromDb((current) => [listing, ...current]); setActiveCategory(listing.category); setShowPublish(false); flashNotice("Tu publicación fue guardada"); }} />}
 
       {selectedListing && (
         <Modal onClose={() => setSelectedListing(null)} className="detail-modal">
@@ -426,8 +483,83 @@ function Modal({ children, onClose, className = "" }: { children: React.ReactNod
   return <div className="modal-backdrop" onClick={onClose}><div className={`modal ${className}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>{children}</div></div>;
 }
 
-function PublishModal({ category, onClose, onCreated }: { category: Category; onClose: () => void; onCreated: (listing: Listing) => void }) {
-  const [form, setForm] = useState({ title: "", location: "", price: "", description: "", ownerName: "", ownerWhatsApp: "" });
+function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: AuthUser | null; onClose: () => void; onAuthenticated: (user: AuthUser) => void; onLoggedOut: () => void }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSaving(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/auth/${mode === "login" ? "login" : "register"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const payload = (await response.json()) as { user?: AuthUser; error?: string };
+      if (!response.ok || !payload.user) throw new Error(payload.error ?? "No se pudo iniciar sesión");
+      onAuthenticated(payload.user);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Revisa tus datos e intenta otra vez.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function logout() {
+    setIsSaving(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("No se pudo cerrar la sesión");
+      onLoggedOut();
+    } catch (logoutError) {
+      setError(logoutError instanceof Error ? logoutError.message : "Inténtalo nuevamente.");
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <Modal onClose={onClose} className="login-modal">
+      <button className="close-button login-close" onClick={onClose} aria-label="Cerrar inicio de sesión">×</button>
+      <span className="login-logo"><Icon>⌂</Icon></span>
+      <span className="modal-kicker">Tu cuenta roomies20</span>
+      {user ? (
+        <div className="account-summary">
+          <h2>Hola, {user.name}</h2>
+          <p>Tu sesión está activa y ya puedes publicar anuncios con tu cuenta.</p>
+          <span>{user.email}</span>
+          {error && <p className="form-error">{error}</p>}
+          <button className="primary-button account-button" onClick={onClose}>Continuar <Icon>→</Icon></button>
+          <button className="text-action account-logout" disabled={isSaving} onClick={logout}>{isSaving ? "Cerrando…" : "Cerrar sesión"}</button>
+        </div>
+      ) : (
+        <>
+          <h2>{mode === "login" ? "Inicia sesión para continuar" : "Crea tu cuenta"}</h2>
+          <p>{mode === "login" ? "Guarda favoritos, publica anuncios y gestiona tus consultas desde un solo lugar." : "Regístrate para publicar y recibir clientes directamente por WhatsApp."}</p>
+          <div className="auth-switch" role="group" aria-label="Tipo de acceso">
+            <button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>Ingresar</button>
+            <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>Crear cuenta</button>
+          </div>
+          <form className="auth-form" onSubmit={submit}>
+            {mode === "register" && <label>Nombre<input required minLength={2} maxLength={80} autoComplete="name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Tu nombre" /></label>}
+            <label>Correo electrónico<input required type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="tu@correo.com" /></label>
+            <label>Contraseña<input required minLength={8} maxLength={128} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Mínimo 8 caracteres" /></label>
+            {error && <p className="form-error">{error}</p>}
+            <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Procesando…" : mode === "login" ? "Iniciar sesión" : "Crear mi cuenta"}<Icon>→</Icon></button>
+          </form>
+          <small>Tu contraseña se guarda cifrada. Al continuar aceptas nuestros términos de uso.</small>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { category: Category; defaultOwnerName: string; onClose: () => void; onCreated: (listing: Listing) => void }) {
+  const [form, setForm] = useState({ title: "", location: "", price: "", description: "", ownerName: defaultOwnerName, ownerWhatsApp: "" });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
@@ -468,7 +600,7 @@ function PublishModal({ category, onClose, onCreated }: { category: Category; on
       <form onSubmit={submit}>
         <div className="form-grid"><label>Título<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ej. Depa luminoso en Barranco" /></label><label>Ubicación<input required value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Distrito, ciudad" /></label><label>Precio en soles<input required min="1" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label><label>Tu nombre<input required value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label></div>
         <label>Descripción<textarea required rows={4} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Cuenta qué hace especial a tu anuncio…" /></label>
-        <label className="image-upload">Fotografía principal<input type="file" accept="image/jpeg,image/png,image/webp,image/avif" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /><span>{imageFile ? `✓ ${imageFile.name}` : "Seleccionar imagen · máximo 8 MB"}</span></label>
+        <label className="image-upload">Fotografía principal<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /><span>{imageFile ? `✓ ${imageFile.name}` : "Seleccionar imagen · máximo 8 MB"}</span></label>
         <label>WhatsApp de contacto<input required value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>
         {error && <p className="form-error">{error}</p>}
         <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Guardando…" : "Guardar y publicar"}<Icon>→</Icon></button>
