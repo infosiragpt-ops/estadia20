@@ -981,9 +981,16 @@ class Roomies20Handler(BaseHTTPRequestHandler):
     def serve_static(self, request_path: str) -> None:
         relative = unquote(request_path).lstrip("/") or "index.html"
         file_path = (PUBLIC_DIR / relative).resolve()
-        if PUBLIC_DIR.resolve() not in file_path.parents or not file_path.is_file():
+        is_spa_fallback = PUBLIC_DIR.resolve() not in file_path.parents or not file_path.is_file()
+        if is_spa_fallback:
             file_path = PUBLIC_DIR / "index.html"
-        self.serve_file(file_path, "public, max-age=31536000" if "." in relative else "no-cache")
+        is_versioned_asset = relative.startswith("assets/") and not is_spa_fallback
+        cache_control = (
+            "public, max-age=31536000, immutable"
+            if is_versioned_asset
+            else "no-cache, no-store, must-revalidate"
+        )
+        self.serve_file(file_path, cache_control)
 
     def serve_file(self, file_path: Path, cache_control: str) -> None:
         try:
