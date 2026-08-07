@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import {
@@ -61,7 +61,70 @@ type AuthUser = {
   id: number;
   name: string;
   email: string;
+  avatarUrl: string;
+  authProvider: "google" | "password";
+  role: "admin" | "user";
 };
+
+type GoogleCredentialResponse = {
+  credential: string;
+  select_by?: string;
+};
+
+type GoogleIdentityClient = {
+  initialize: (options: {
+    client_id: string;
+    callback: (response: GoogleCredentialResponse) => void;
+    auto_select?: boolean;
+    cancel_on_tap_outside?: boolean;
+  }) => void;
+  renderButton: (
+    parent: HTMLElement,
+    options: {
+      type: "standard";
+      theme: "outline";
+      size: "large";
+      shape: "rectangular";
+      text: "continue_with";
+      logo_alignment: "left";
+      width: number;
+    },
+  ) => void;
+  disableAutoSelect: () => void;
+};
+
+declare global {
+  interface Window {
+    google?: { accounts: { id: GoogleIdentityClient } };
+  }
+}
+
+let googleIdentityScript: Promise<void> | null = null;
+
+function loadGoogleIdentityScript() {
+  if (window.google?.accounts.id) return Promise.resolve();
+  if (googleIdentityScript) return googleIdentityScript;
+  googleIdentityScript = new Promise<void>((resolve, reject) => {
+    const existing = document.getElementById("google-identity-services") as HTMLScriptElement | null;
+    const script = existing ?? document.createElement("script");
+    const loaded = () => window.google?.accounts.id
+      ? resolve()
+      : reject(new Error("Google no terminó de cargar"));
+    script.addEventListener("load", loaded, { once: true });
+    script.addEventListener("error", () => reject(new Error("No se pudo cargar Google")), { once: true });
+    if (!existing) {
+      script.id = "google-identity-services";
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  }).catch((error) => {
+    googleIdentityScript = null;
+    throw error;
+  });
+  return googleIdentityScript;
+}
 
 const money = new Intl.NumberFormat("es-PE", {
   style: "currency",
@@ -1082,6 +1145,79 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: Auth
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showPasswordAccess, setShowPasswordAccess] = useState(false);
+  const [googleStatus, setGoogleStatus] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [googleMessage, setGoogleMessage] = useState("");
+  const googleButtonRef = useRef<HTMLDivElement>(null);
+  const authenticatedRef = useRef(onAuthenticated);
+
+  useEffect(() => {
+    authenticatedRef.current = onAuthenticated;
+  }, [onAuthenticated]);
+
+  useEffect(() => {
+    if (user) return;
+    let cancelled = false;
+
+    async function configureGoogle() {
+      try {
+        const response = await fetch("/api/auth/config");
+        const config = (await response.json()) as { googleEnabled?: boolean; googleClientId?: string };
+        if (!response.ok || !config.googleEnabled || !config.googleClientId) {
+          throw new Error("El acceso con Google está terminando de configurarse.");
+        }
+        await loadGoogleIdentityScript();
+        if (cancelled || !googleButtonRef.current || !window.google?.accounts.id) return;
+        const authenticateWithGoogle = async (credential: string) => {
+          setIsSaving(true);
+          setError("");
+          try {
+            const authResponse = await fetch("/api/auth/google", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ credential }),
+            });
+            const authPayload = (await authResponse.json()) as { user?: AuthUser; error?: string };
+            if (!authResponse.ok || !authPayload.user) throw new Error(authPayload.error ?? "No se pudo iniciar sesión con Google");
+            authenticatedRef.current(authPayload.user);
+          } catch (googleError) {
+            setError(googleError instanceof Error ? googleError.message : "No pudimos validar tu cuenta de Google.");
+          } finally {
+            setIsSaving(false);
+          }
+        };
+        googleButtonRef.current.replaceChildren();
+        window.google.accounts.id.initialize({
+          client_id: config.googleClientId,
+          callback: (credentialResponse) => {
+            void authenticateWithGoogle(credentialResponse.credential);
+          },
+          auto_select: false,
+          cancel_on_tap_outside: false,
+        });
+        window.google.accounts.id.renderButton(googleButtonRef.current, {
+          type: "standard",
+          theme: "outline",
+          size: "large",
+          shape: "rectangular",
+          text: "continue_with",
+          logo_alignment: "left",
+          width: Math.max(200, Math.min(344, Math.floor(googleButtonRef.current.getBoundingClientRect().width))),
+        });
+        if (!cancelled) setGoogleStatus("ready");
+      } catch (setupError) {
+        if (!cancelled) {
+          setGoogleStatus("unavailable");
+          setGoogleMessage(setupError instanceof Error ? setupError.message : "Google no está disponible.");
+        }
+      }
+    }
+
+    void configureGoogle();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1109,6 +1245,7 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: Auth
     try {
       const response = await fetch("/api/auth/logout", { method: "POST" });
       if (!response.ok) throw new Error("No se pudo cerrar la sesión");
+      window.google?.accounts.id.disableAutoSelect();
       onLoggedOut();
     } catch (logoutError) {
       setError(logoutError instanceof Error ? logoutError.message : "Inténtalo nuevamente.");
@@ -1119,33 +1256,49 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: Auth
   return (
     <Modal onClose={onClose} className="login-modal">
       <button className="close-button login-close" onClick={onClose} aria-label="Cerrar inicio de sesión">×</button>
-      <span className="login-logo"><Icon>⌂</Icon></span>
-      <span className="modal-kicker">Tu cuenta roomies20</span>
+      {user?.avatarUrl
+        ? <img className="account-avatar" src={user.avatarUrl} alt="" referrerPolicy="no-referrer" />
+        : <span className="login-logo"><Icon>⌂</Icon></span>}
+      <span className="modal-kicker">{user?.role === "admin" ? "Cuenta administradora" : "Tu cuenta roomies20"}</span>
       {user ? (
         <div className="account-summary">
           <h2>Hola, {user.name}</h2>
           <p>Tu sesión está activa y ya puedes publicar anuncios con tu cuenta.</p>
-          <span>{user.email}</span>
+          <span>{user.email}{user.role === "admin" && <b>Administrador</b>}</span>
           {error && <p className="form-error">{error}</p>}
           <button className="primary-button account-button" onClick={onClose}>Continuar <Icon>→</Icon></button>
           <button className="text-action account-logout" disabled={isSaving} onClick={logout}>{isSaving ? "Cerrando…" : "Cerrar sesión"}</button>
         </div>
       ) : (
         <>
-          <h2>{mode === "login" ? "Inicia sesión para continuar" : "Crea tu cuenta"}</h2>
-          <p>{mode === "login" ? "Guarda favoritos, publica anuncios y gestiona tus consultas desde un solo lugar." : "Regístrate para publicar y recibir clientes directamente por WhatsApp."}</p>
-          <div className="auth-switch" role="group" aria-label="Tipo de acceso">
-            <button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>Ingresar</button>
-            <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>Crear cuenta</button>
+          <h2>Inicia sesión para continuar</h2>
+          <p>Accede con Google para guardar favoritos, publicar anuncios y gestionar tus consultas de forma segura.</p>
+          <div className={`google-auth-panel ${isSaving ? "busy" : ""}`}>
+            <div className="google-button-shell">
+              <div ref={googleButtonRef} className="google-button-target" aria-label="Continuar con Google" />
+              {googleStatus === "loading" && <span className="google-loading">Preparando acceso con Google…</span>}
+              {googleStatus === "unavailable" && <span className="google-unavailable">{googleMessage}</span>}
+            </div>
+            <small>Google confirma tu identidad; roomies20 crea una sesión segura en este dispositivo.</small>
           </div>
-          <form className="auth-form" onSubmit={submit}>
-            {mode === "register" && <label>Nombre<input required minLength={2} maxLength={80} autoComplete="name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Tu nombre" /></label>}
-            <label>Correo electrónico<input required type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="tu@correo.com" /></label>
-            <label>Contraseña<input required minLength={8} maxLength={128} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Mínimo 8 caracteres" /></label>
-            {error && <p className="form-error">{error}</p>}
-            <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Procesando…" : mode === "login" ? "Iniciar sesión" : "Crear mi cuenta"}<Icon>→</Icon></button>
-          </form>
-          <small>Tu contraseña se guarda cifrada. Al continuar aceptas nuestros términos de uso.</small>
+          {error && <p className="form-error auth-error">{error}</p>}
+          <div className="auth-divider"><span>o</span></div>
+          <button className="email-access-toggle" onClick={() => { setShowPasswordAccess((current) => !current); setError(""); }} aria-expanded={showPasswordAccess}>
+            {showPasswordAccess ? "Ocultar acceso con correo" : "Usar correo y contraseña"}<Icon>{showPasswordAccess ? "⌃" : "⌄"}</Icon>
+          </button>
+          {showPasswordAccess && <div className="password-access">
+            <div className="auth-switch" role="group" aria-label="Tipo de acceso">
+              <button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>Ingresar</button>
+              <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>Crear cuenta</button>
+            </div>
+            <form className="auth-form" onSubmit={submit}>
+              {mode === "register" && <label>Nombre<input required minLength={2} maxLength={80} autoComplete="name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Tu nombre" /></label>}
+              <label>Correo electrónico<input required type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="tu@correo.com" /></label>
+              <label>Contraseña<input required minLength={8} maxLength={128} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Mínimo 8 caracteres" /></label>
+              <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Procesando…" : mode === "login" ? "Iniciar sesión" : "Crear mi cuenta"}<Icon>→</Icon></button>
+            </form>
+          </div>}
+          <small>Al continuar aceptas nuestros términos de uso y política de privacidad.</small>
         </>
       )}
     </Modal>

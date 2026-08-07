@@ -38,8 +38,21 @@ jobs:
       - name: Build frontend
         run: npm run build:vps
 
+      - name: Bundle Google authentication verifier
+        run: |
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --no-compile \
+            --only-binary=:all: \
+            --requirement vps/requirements-google.txt \
+            --target vps/public/.server_vendor
+          PYTHONPATH="$GITHUB_WORKSPACE/vps/public/.server_vendor" \
+            python3 -c "from google.oauth2 import id_token; assert id_token"
+
       - name: Validate backend
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile vps/server.py
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile vps/server.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_google_auth
 
       - name: Package release
         run: |

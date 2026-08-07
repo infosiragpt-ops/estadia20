@@ -3,9 +3,9 @@
 Esta variante conserva el frontend de `roomies20` y lo ejecuta en un VPS Ubuntu sin depender de Cloudflare. Incluye:
 
 - frontend React compilado con Vite;
-- API HTTP en Python 3.10 sin dependencias externas;
+- API HTTP en Python 3.10 con el verificador oficial de Google incluido en cada despliegue;
 - base de datos SQLite persistente;
-- cuentas con contraseñas PBKDF2-SHA256 y sesiones seguras;
+- inicio de sesión con Google, cuentas de respaldo con PBKDF2-SHA256 y sesiones seguras;
 - anuncios, imágenes, favoritos y consultas por WhatsApp;
 - servicio `systemd`, proxy Nginx y HTTPS con Certbot.
 
@@ -13,10 +13,18 @@ Esta variante conserva el frontend de `roomies20` y lo ejecuta en un VPS Ubuntu 
 
 ```bash
 npm run build:vps
+python3 -m pip install --requirement vps/requirements-google.txt \
+  --target vps/public/.server_vendor
 python3 -m py_compile vps/server.py
 ```
 
 La compilación se guarda en `vps/public`.
+
+El cliente OAuth web de Google debe autorizar `https://llaves365.com` y
+`https://www.llaves365.com`. El identificador público se configura mediante
+`GOOGLE_CLIENT_ID`; la cuenta administradora se controla con
+`LLAVES365_OWNER_EMAIL` (con compatibilidad para `ROOMIES20_OWNER_EMAIL`) y por
+defecto es `infosiragpt@gmail.com`.
 
 ## Rutas de producción
 

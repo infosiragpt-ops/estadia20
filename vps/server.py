@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import time
 import uuid
 from datetime import date
@@ -22,6 +23,8 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -29,6 +32,15 @@ DATA_DIR = Path(os.environ.get("ESTADIA20_DATA_DIR", "/var/lib/estadia20"))
 DATABASE_PATH = DATA_DIR / "estadia20.sqlite3"
 UPLOADS_DIR = DATA_DIR / "uploads"
 PUBLIC_DIR = Path(os.environ.get("ESTADIA20_PUBLIC_DIR", "/opt/estadia20/public"))
+GOOGLE_VENDOR_DIR = PUBLIC_DIR / ".server_vendor"
+GOOGLE_CLIENT_ID = os.environ.get(
+    "GOOGLE_CLIENT_ID",
+    "1076572757032-u0jp02mfhohujaao9qu64jlmja0asn2c.apps.googleusercontent.com",
+).strip()
+OWNER_EMAIL = os.environ.get(
+    "LLAVES365_OWNER_EMAIL",
+    os.environ.get("ROOMIES20_OWNER_EMAIL", "infosiragpt@gmail.com"),
+).strip().lower()
 VISITOR_COOKIE = "depitass_visitor"
 SESSION_COOKIE = "estadia20_session"
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -202,6 +214,29 @@ def initialize_database() -> None:
             database.execute(
                 "ALTER TABLE listings ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'"
             )
+        user_columns = {
+            row["name"] for row in database.execute("PRAGMA table_info(users)")
+        }
+        user_migrations = {
+            "google_sub": "ALTER TABLE users ADD COLUMN google_sub TEXT",
+            "avatar_url": (
+                "ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''"
+            ),
+            "auth_provider": (
+                "ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'password'"
+            ),
+            "role": "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+        }
+        for column, migration in user_migrations.items():
+            if column not in user_columns:
+                database.execute(migration)
+        database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub
+              ON users (google_sub)
+              WHERE google_sub IS NOT NULL
+            """
+        )
         depa_count = database.execute(
             "SELECT COUNT(*) FROM listings WHERE category = 'Depas'"
         ).fetchone()[0]
@@ -264,6 +299,86 @@ def verify_password(password: str, encoded: str) -> bool:
         return hmac.compare_digest(actual, expected)
     except (ValueError, TypeError, binascii.Error):
         return False
+
+
+def user_dict(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "email": row["email"],
+        "avatarUrl": row["avatar_url"],
+        "authProvider": row["auth_provider"],
+        "role": row["role"],
+    }
+
+
+class GoogleTransportResponse:
+    """Minimal response adapter used by the Google Auth verifier."""
+
+    def __init__(self, status: int, data: bytes, headers: dict[str, str]):
+        self.status = status
+        self.data = data
+        self.headers = headers
+
+
+class GoogleTransportRequest:
+    """HTTPS transport for google-auth implemented with Python's standard library."""
+
+    def __call__(
+        self,
+        url: str,
+        method: str = "GET",
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: int | float | None = None,
+        **_: object,
+    ) -> GoogleTransportResponse:
+        request = urllib_request.Request(
+            url,
+            data=body,
+            headers=headers or {},
+            method=method,
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=timeout or 10) as response:
+                return GoogleTransportResponse(
+                    response.status,
+                    response.read(),
+                    dict(response.headers.items()),
+                )
+        except urllib_error.HTTPError as error:
+            return GoogleTransportResponse(
+                error.code,
+                error.read(),
+                dict(error.headers.items()) if error.headers else {},
+            )
+        except (urllib_error.URLError, TimeoutError, OSError) as error:
+            raise RuntimeError("No se pudo contactar a Google") from error
+
+
+def verify_google_credential(credential: str) -> dict[str, object]:
+    if not GOOGLE_CLIENT_ID:
+        raise RuntimeError("Google no está configurado")
+    if GOOGLE_VENDOR_DIR.is_dir() and str(GOOGLE_VENDOR_DIR) not in sys.path:
+        sys.path.insert(0, str(GOOGLE_VENDOR_DIR))
+    try:
+        from google.auth import exceptions as google_exceptions
+        from google.oauth2 import id_token
+    except ImportError as error:
+        raise RuntimeError("El verificador de Google no está disponible") from error
+
+    try:
+        claims = id_token.verify_oauth2_token(
+            credential,
+            GoogleTransportRequest(),
+            GOOGLE_CLIENT_ID,
+            clock_skew_in_seconds=10,
+        )
+    except (ValueError, google_exceptions.GoogleAuthError) as error:
+        raise ValueError("Credencial de Google inválida") from error
+    if claims.get("email_verified") is not True:
+        raise ValueError("Google no confirmó el correo")
+    return claims
 
 
 def listing_dict(row: sqlite3.Row) -> dict[str, object]:
@@ -404,7 +519,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         with connect() as database:
             row = database.execute(
                 """
-                SELECT users.id, users.name, users.email
+                SELECT users.id, users.name, users.email, users.avatar_url,
+                       users.auth_provider, users.role
                 FROM sessions
                 JOIN users ON users.id = sessions.user_id
                 WHERE sessions.token_hash = ? AND sessions.expires_at > ?
@@ -441,6 +557,14 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/health":
             self.send_json({"ok": True, "database": DATABASE_PATH.exists()})
             return
+        if parsed.path == "/api/auth/config":
+            self.send_json(
+                {
+                    "googleEnabled": bool(GOOGLE_CLIENT_ID),
+                    "googleClientId": GOOGLE_CLIENT_ID,
+                }
+            )
+            return
         if parsed.path == "/api/listings":
             category = parse_qs(parsed.query).get("category", [None])[0]
             query = "SELECT * FROM listings"
@@ -455,15 +579,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/auth/me":
             user = self.authenticated_user()
-            self.send_json(
-                {
-                    "user": (
-                        {"id": user["id"], "name": user["name"], "email": user["email"]}
-                        if user is not None
-                        else None
-                    )
-                }
-            )
+            self.send_json({"user": user_dict(user) if user is not None else None})
             return
         if parsed.path == "/api/favorites":
             visitor_id, is_new = self.visitor()
@@ -492,6 +608,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 self.register_user()
             elif parsed.path == "/api/auth/login":
                 self.login_user()
+            elif parsed.path == "/api/auth/google":
+                self.google_login()
             elif parsed.path == "/api/auth/logout":
                 self.logout_user()
             elif parsed.path == "/api/listings":
@@ -556,6 +674,13 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     (name, email, hash_password(password)),
                 )
                 user_id = int(cursor.lastrowid)
+                user = database.execute(
+                    """
+                    SELECT id, name, email, avatar_url, auth_provider, role
+                    FROM users WHERE id = ?
+                    """,
+                    (user_id,),
+                ).fetchone()
                 token = self.create_session(database, user_id)
         except sqlite3.IntegrityError:
             self.send_json(
@@ -564,7 +689,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             )
             return
         self.send_json(
-            {"user": {"id": user_id, "name": name, "email": email}},
+            {"user": user_dict(user)},
             HTTPStatus.CREATED,
             session_token=token,
         )
@@ -575,7 +700,11 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         password = str(payload.get("password", ""))
         with connect() as database:
             user = database.execute(
-                "SELECT id, name, email, password_hash FROM users WHERE email = ?",
+                """
+                SELECT id, name, email, password_hash, avatar_url,
+                       auth_provider, role
+                FROM users WHERE email = ?
+                """,
                 (email,),
             ).fetchone()
             if user is None or not verify_password(password, user["password_hash"]):
@@ -586,9 +715,117 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 return
             token = self.create_session(database, int(user["id"]))
         self.send_json(
-            {"user": {"id": user["id"], "name": user["name"], "email": user["email"]}},
+            {"user": user_dict(user)},
             session_token=token,
         )
+
+    def google_login(self) -> None:
+        if not GOOGLE_CLIENT_ID:
+            self.send_json(
+                {"error": "El acceso con Google todavía no está configurado."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        payload = self.read_json()
+        credential = str(payload.get("credential", "")).strip()
+        if not credential or len(credential) > 12_000:
+            self.send_json(
+                {"error": "Google no entregó una credencial válida."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        try:
+            claims = verify_google_credential(credential)
+        except ValueError:
+            self.send_json(
+                {"error": "No pudimos validar tu cuenta de Google. Inténtalo otra vez."},
+                HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        except RuntimeError as error:
+            print(f"Google authentication unavailable: {error!r}", flush=True)
+            self.send_json(
+                {"error": "Google no está disponible en este momento."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+
+        google_sub = str(claims.get("sub", "")).strip()
+        email = str(claims.get("email", "")).strip().lower()
+        name = str(claims.get("name", "")).strip()[:80] or email.split("@", 1)[0]
+        avatar_url = str(claims.get("picture", "")).strip()[:500]
+        if not avatar_url.startswith("https://"):
+            avatar_url = ""
+        if (
+            not google_sub
+            or len(google_sub) > 255
+            or len(email) > 160
+            or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)
+        ):
+            self.send_json(
+                {"error": "La cuenta de Google no contiene un correo válido."},
+                HTTPStatus.UNAUTHORIZED,
+            )
+            return
+
+        role = "admin" if email == OWNER_EMAIL else "user"
+        try:
+            with connect() as database:
+                by_google = database.execute(
+                    "SELECT id FROM users WHERE google_sub = ?", (google_sub,)
+                ).fetchone()
+                by_email = database.execute(
+                    "SELECT id FROM users WHERE email = ?", (email,)
+                ).fetchone()
+                if (
+                    by_google is not None
+                    and by_email is not None
+                    and by_google["id"] != by_email["id"]
+                ):
+                    self.send_json(
+                        {"error": "Ese correo ya pertenece a otra cuenta."},
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
+                existing = by_google or by_email
+                if existing is None:
+                    cursor = database.execute(
+                        """
+                        INSERT INTO users
+                          (name, email, password_hash, google_sub, avatar_url,
+                           auth_provider, role)
+                        VALUES (?, ?, '', ?, ?, 'google', ?)
+                        """,
+                        (name, email, google_sub, avatar_url, role),
+                    )
+                    user_id = int(cursor.lastrowid)
+                else:
+                    user_id = int(existing["id"])
+                    database.execute(
+                        """
+                        UPDATE users
+                        SET name = ?, email = ?, google_sub = ?, avatar_url = ?,
+                            auth_provider = 'google', role = ?
+                        WHERE id = ?
+                        """,
+                        (name, email, google_sub, avatar_url, role, user_id),
+                    )
+                user = database.execute(
+                    """
+                    SELECT id, name, email, avatar_url, auth_provider, role
+                    FROM users WHERE id = ?
+                    """,
+                    (user_id,),
+                ).fetchone()
+                token = self.create_session(database, user_id)
+        except sqlite3.IntegrityError:
+            self.send_json(
+                {"error": "No pudimos vincular esa cuenta de Google."},
+                HTTPStatus.CONFLICT,
+            )
+            return
+
+        self.send_json({"user": user_dict(user)}, session_token=token)
 
     def logout_user(self) -> None:
         cookies = SimpleCookie(self.headers.get("Cookie", ""))
