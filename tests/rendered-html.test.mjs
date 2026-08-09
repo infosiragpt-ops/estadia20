@@ -20,6 +20,13 @@ test("ships the finished roomies20 marketplace", async () => {
   assert.match(page, /Iniciar sesión/);
   assert.match(page, /Ver planes/);
   assert.match(page, /https:\/\/wa\.me\//);
+  assert.match(page, /results-toolbar/);
+  assert.match(page, /ListingSkeleton/);
+  assert.match(page, /If-None-Match/);
+  assert.match(page, /useDeferredValue/);
+  assert.match(page, /aria-live="polite"/);
+  assert.match(styles, /\.results-error/);
+  assert.match(styles, /prefers-reduced-motion/);
   assert.match(styles, /\.listing-grid/);
   assert.doesNotMatch(page, /traffic-banner/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
@@ -46,4 +53,21 @@ test("keeps database, uploads, favorites, and inquiries deployable", async () =>
   assert.match(favorites, /export async function POST/);
   assert.match(inquiries, /export async function POST/);
   assert.match(uploads, /UPLOADS/);
+});
+
+test("hardens the VPS marketplace API", async () => {
+  const [server, nginx, workflow] = await Promise.all([
+    readFile(new URL("vps/server.py", root), "utf8"),
+    readFile(new URL("vps/estadia20.nginx", root), "utf8"),
+    readFile(new URL(".github/workflows/deploy-production.yml", root), "utf8"),
+  ]);
+
+  assert.match(server, /def listings_query/);
+  assert.match(server, /search_matches/);
+  assert.match(server, /RATE_LIMIT_RULES/);
+  assert.match(server, /image_extension_from_content/);
+  assert.match(server, /listing_not_found/);
+  assert.match(server, /stale-while-revalidate/);
+  assert.match(nginx, /Content-Security-Policy/);
+  assert.match(workflow, /tests\.test_marketplace_api/);
 });

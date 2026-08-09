@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import {
@@ -56,6 +56,33 @@ const searchStopWords = new Set([
 
 const bedroomOptions = ["Todos", "1", "2", "3", "4+"] as const;
 type BedroomFilter = typeof bedroomOptions[number];
+type ListingSort = "recommended" | "newest" | "price_asc" | "price_desc" | "rating";
+type ListingsStatus = "loading" | "ready" | "error";
+
+type ListingsMeta = {
+  total: number;
+  categoryTotal: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  hasMore: boolean;
+  sort: ListingSort;
+};
+
+type ListingsPayload = {
+  listings?: Listing[];
+  meta?: ListingsMeta;
+  error?: string;
+  requestId?: string;
+};
+
+const sortOptions: Array<{ value: ListingSort; label: string }> = [
+  { value: "recommended", label: "Recomendados" },
+  { value: "newest", label: "Más recientes" },
+  { value: "price_asc", label: "Menor precio" },
+  { value: "price_desc", label: "Mayor precio" },
+  { value: "rating", label: "Mejor valorados" },
+];
 
 type AuthUser = {
   id: number;
@@ -415,7 +442,7 @@ function listingSearchScore(listing: Listing, query: string) {
     { value: listing.details?.address ?? "", weight: 9 },
     { value: listing.meta, weight: 7 },
     { value: listing.description, weight: 5 },
-    { value: listing.details?.features.join(" ") ?? "", weight: 6 },
+    { value: listing.details?.features?.join(" ") ?? "", weight: 6 },
     { value: listing.badge ?? "", weight: 3 },
     { value: listing.ownerName, weight: 2 },
     { value: `${listing.price} soles`, weight: 5 },
@@ -542,17 +569,78 @@ function DepaFilterControls({
   );
 }
 
+function useDebouncedValue<T>(value: T, delay: number) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebounced(value), delay);
+    return () => window.clearTimeout(timeout);
+  }, [delay, value]);
+  return debounced;
+}
+
+function ListingSkeleton() {
+  return (
+    <div className="listing-card listing-skeleton" aria-hidden="true">
+      <span className="skeleton-image" />
+      <span className="skeleton-line wide" />
+      <span className="skeleton-line medium" />
+      <span className="skeleton-line short" />
+      <span className="skeleton-action" />
+    </div>
+  );
+}
+
+function readInitialUrlState() {
+  const defaults = {
+    category: "Roomies" as Category,
+    search: "",
+    service: "Todos",
+    minPrice: "",
+    maxPrice: "",
+    bedrooms: "Todos" as BedroomFilter,
+    features: [] as DepaFeature[],
+    sort: "recommended" as ListingSort,
+    checkIn: dateValue(addDays(new Date(), 14)),
+    checkOut: dateValue(addDays(new Date(), 15)),
+    guests: 2,
+  };
+  if (typeof window === "undefined") return defaults;
+  const parameters = new URLSearchParams(window.location.search);
+  const category = parameters.get("category");
+  const requestedSort = parameters.get("sort");
+  const requestedBedrooms = parameters.get("bedrooms");
+  const requestedService = parameters.get("service");
+  const requestedCheckIn = parameters.get("checkIn");
+  const requestedCheckOut = parameters.get("checkOut");
+  const requestedGuests = Number(parameters.get("guests"));
+  return {
+    category: category && categories.some((item) => item.id === category) ? category as Category : defaults.category,
+    search: parameters.get("q") ?? defaults.search,
+    service: ["Todos", "Mudanza", "Corporativo"].includes(requestedService ?? "") ? requestedService as string : defaults.service,
+    minPrice: parameters.get("minPrice") ?? defaults.minPrice,
+    maxPrice: parameters.get("maxPrice") ?? defaults.maxPrice,
+    bedrooms: requestedBedrooms && bedroomOptions.includes(requestedBedrooms as BedroomFilter) ? requestedBedrooms as BedroomFilter : defaults.bedrooms,
+    features: (parameters.get("features") ?? "").split(",").filter((feature): feature is DepaFeature => depaFeatureOptions.includes(feature as DepaFeature)),
+    sort: requestedSort && sortOptions.some((item) => item.value === requestedSort) ? requestedSort as ListingSort : defaults.sort,
+    checkIn: requestedCheckIn && /^\d{4}-\d{2}-\d{2}$/.test(requestedCheckIn) ? requestedCheckIn : defaults.checkIn,
+    checkOut: requestedCheckOut && /^\d{4}-\d{2}-\d{2}$/.test(requestedCheckOut) ? requestedCheckOut : defaults.checkOut,
+    guests: Number.isInteger(requestedGuests) && requestedGuests >= 1 && requestedGuests <= 16 ? requestedGuests : defaults.guests,
+  };
+}
+
 export default function Home() {
-  const [activeCategory, setActiveCategory] = useState<Category>("Roomies");
-  const [search, setSearch] = useState("");
-  const [service, setService] = useState("Todos");
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
-  const [bedrooms, setBedrooms] = useState<BedroomFilter>("Todos");
-  const [selectedDepaFeatures, setSelectedDepaFeatures] = useState<DepaFeature[]>([]);
-  const [checkIn, setCheckIn] = useState(() => dateValue(addDays(new Date(), 14)));
-  const [checkOut, setCheckOut] = useState(() => dateValue(addDays(new Date(), 15)));
-  const [guestCount, setGuestCount] = useState(2);
+  const [initialUrlState] = useState(readInitialUrlState);
+  const [activeCategory, setActiveCategory] = useState<Category>(initialUrlState.category);
+  const [search, setSearch] = useState(initialUrlState.search);
+  const [service, setService] = useState(initialUrlState.service);
+  const [minPrice, setMinPrice] = useState(initialUrlState.minPrice);
+  const [maxPrice, setMaxPrice] = useState(initialUrlState.maxPrice);
+  const [bedrooms, setBedrooms] = useState<BedroomFilter>(initialUrlState.bedrooms);
+  const [selectedDepaFeatures, setSelectedDepaFeatures] = useState<DepaFeature[]>(initialUrlState.features);
+  const [sort, setSort] = useState<ListingSort>(initialUrlState.sort);
+  const [checkIn, setCheckIn] = useState(initialUrlState.checkIn);
+  const [checkOut, setCheckOut] = useState(initialUrlState.checkOut);
+  const [guestCount, setGuestCount] = useState(initialUrlState.guests);
   const [showSearchOptions, setShowSearchOptions] = useState(false);
   const [showAirbnbCalendar, setShowAirbnbCalendar] = useState(false);
   const [showAirbnbGuests, setShowAirbnbGuests] = useState(false);
@@ -573,7 +661,18 @@ export default function Home() {
   const [favorites, setFavorites] = useState<number[]>([]);
   const [listingsFromDb, setListingsFromDb] = useState<Listing[]>([]);
   const [loadedCategory, setLoadedCategory] = useState<Category | null>(null);
+  const [listingsMeta, setListingsMeta] = useState<ListingsMeta | null>(null);
+  const [listingsStatus, setListingsStatus] = useState<ListingsStatus>("loading");
+  const [listingsError, setListingsError] = useState("");
+  const [retryListings, setRetryListings] = useState(0);
+  const [favoriteMutations, setFavoriteMutations] = useState<number[]>([]);
   const [notice, setNotice] = useState("");
+  const [noticeTone, setNoticeTone] = useState<"success" | "error">("success");
+  const listingsCacheRef = useRef(new Map<string, { etag: string; payload: ListingsPayload }>());
+  const noticeTimeoutRef = useRef<number | null>(null);
+
+  const deferredSearch = useDeferredValue(search);
+  const debouncedSearch = useDebouncedValue(deferredSearch, 260);
 
   const detail = categoryDetails[activeCategory];
   const airbnbNights = stayNights(checkIn, checkOut);
@@ -595,29 +694,77 @@ export default function Home() {
   const activeDepaFilterCount = (bedrooms === "Todos" ? 0 : 1) + (minPrice ? 1 : 0) + (maxPrice ? 1 : 0) + selectedDepaFeatures.length;
 
   useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/listings?category=${encodeURIComponent(activeCategory)}`)
+    const parameters = new URLSearchParams();
+    parameters.set("category", activeCategory);
+    if (search.trim()) parameters.set("q", search.trim());
+    if (sort !== "recommended") parameters.set("sort", sort);
+    if (activeCategory === "Depas") {
+      if (minPrice) parameters.set("minPrice", minPrice);
+      if (maxPrice) parameters.set("maxPrice", maxPrice);
+      if (bedrooms !== "Todos") parameters.set("bedrooms", bedrooms);
+      if (selectedDepaFeatures.length) parameters.set("features", selectedDepaFeatures.join(","));
+    }
+    if (activeCategory !== "Roomies" && activeCategory !== "Depas" && maxPrice) parameters.set("maxPrice", maxPrice);
+    if (activeCategory === "Transporte" && service !== "Todos") parameters.set("service", service);
+    if (activeCategory === "Airbnb") {
+      parameters.set("checkIn", checkIn);
+      parameters.set("checkOut", checkOut);
+      parameters.set("guests", String(guestCount));
+    }
+    const query = parameters.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }, [activeCategory, bedrooms, checkIn, checkOut, guestCount, maxPrice, minPrice, search, selectedDepaFeatures, service, sort]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const parameters = new URLSearchParams({ category: activeCategory, pageSize: "24", sort });
+    if (debouncedSearch.trim()) parameters.set("q", debouncedSearch.trim());
+    if (activeCategory === "Depas") {
+      if (minPrice) parameters.set("minPrice", minPrice);
+      if (maxPrice) parameters.set("maxPrice", maxPrice);
+      if (bedrooms !== "Todos") parameters.set("bedrooms", bedrooms);
+      if (selectedDepaFeatures.length) parameters.set("features", selectedDepaFeatures.join(","));
+    }
+    if (activeCategory !== "Roomies" && activeCategory !== "Depas" && maxPrice) parameters.set("maxPrice", maxPrice);
+    if (activeCategory === "Transporte" && service !== "Todos") parameters.set("service", service);
+    const requestUrl = `/api/listings?${parameters.toString()}`;
+    const cached = listingsCacheRef.current.get(requestUrl);
+    queueMicrotask(() => {
+      if (controller.signal.aborted) return;
+      setListingsStatus("loading");
+      setListingsError("");
+    });
+
+    fetch(requestUrl, {
+      signal: controller.signal,
+      headers: cached?.etag ? { "If-None-Match": cached.etag } : undefined,
+    })
       .then(async (response) => {
-        if (!response.ok) throw new Error("No se pudo leer la base de datos");
-        return (await response.json()) as { listings?: Listing[] };
+        if (response.status === 304 && cached) return cached.payload;
+        const payload = (await response.json()) as ListingsPayload;
+        if (!response.ok) throw new Error(payload.error ?? "No se pudo consultar la base de datos");
+        const etag = response.headers.get("ETag") ?? "";
+        if (etag) listingsCacheRef.current.set(requestUrl, { etag, payload });
+        return payload;
       })
       .then((payload) => {
-        if (!cancelled) {
-          setListingsFromDb(payload.listings ?? []);
-          setLoadedCategory(activeCategory);
-        }
+        if (controller.signal.aborted) return;
+        setListingsFromDb(payload.listings ?? []);
+        setListingsMeta(payload.meta ?? null);
+        setLoadedCategory(activeCategory);
+        setListingsStatus("ready");
       })
-      .catch(() => {
-        if (!cancelled) {
-          setListingsFromDb([]);
-          setLoadedCategory(activeCategory);
-        }
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setListingsFromDb([]);
+        setListingsMeta(null);
+        setLoadedCategory(activeCategory);
+        setListingsStatus("error");
+        setListingsError(error instanceof Error ? error.message : "No se pudo actualizar la búsqueda");
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [activeCategory]);
+    return () => controller.abort();
+  }, [activeCategory, bedrooms, debouncedSearch, maxPrice, minPrice, retryListings, selectedDepaFeatures, service, sort]);
 
   useEffect(() => {
     let cancelled = false;
@@ -654,7 +801,25 @@ export default function Home() {
     };
   }, []);
 
-  const categoryListings = (listingsFromDb.length ? listingsFromDb : demoListings)
+  useEffect(() => () => {
+    if (noticeTimeoutRef.current !== null) window.clearTimeout(noticeTimeoutRef.current);
+  }, []);
+
+  useEffect(() => {
+    function closeTransientUi(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setShowMenu(false);
+      setShowSearchOptions(false);
+      setShowAirbnbCalendar(false);
+      setShowAirbnbGuests(false);
+      setShowDepaFilters(false);
+    }
+    document.addEventListener("keydown", closeTransientUi);
+    return () => document.removeEventListener("keydown", closeTransientUi);
+  }, []);
+
+  const hasDatabaseCategory = loadedCategory === activeCategory && (listingsMeta?.categoryTotal ?? 0) > 0;
+  const categoryListings = (hasDatabaseCategory ? listingsFromDb : demoListings)
     .filter((listing) => listing.category === activeCategory);
 
   const visibleListings = useMemo(() => {
@@ -679,13 +844,44 @@ export default function Home() {
       return true;
     });
 
-    if (!search.trim()) return filteredListings;
-    return filteredListings
-      .map((listing) => ({ listing, score: listingSearchScore(listing, search) }))
-      .filter((result) => result.score >= 0)
-      .sort((left, right) => right.score - left.score)
-      .map((result) => result.listing);
-  }, [activeCategory, bedrooms, categoryListings, maxPrice, minPrice, search, selectedDepaFeatures, service]);
+    let results = filteredListings;
+    if (search.trim()) {
+      const scored = filteredListings
+        .map((listing) => ({ listing, score: listingSearchScore(listing, search) }))
+        .filter((result) => result.score >= 0);
+      if (sort === "recommended") scored.sort((left, right) => right.score - left.score);
+      results = scored.map((result) => result.listing);
+    }
+    if (sort === "price_asc") return [...results].sort((left, right) => left.price - right.price);
+    if (sort === "price_desc") return [...results].sort((left, right) => right.price - left.price);
+    if (sort === "rating") return [...results].sort((left, right) => right.rating - left.rating || right.reviews - left.reviews);
+    if (sort === "newest" && !hasDatabaseCategory) return [...results].sort((left, right) => right.id - left.id);
+    return results;
+  }, [activeCategory, bedrooms, categoryListings, hasDatabaseCategory, maxPrice, minPrice, search, selectedDepaFeatures, service, sort]);
+
+  const resultsTotal = hasDatabaseCategory ? (listingsMeta?.total ?? visibleListings.length) : visibleListings.length;
+  const isInitialListingsLoad = listingsStatus === "loading" && loadedCategory !== activeCategory;
+  const isRefreshingListings = listingsStatus === "loading" && loadedCategory === activeCategory;
+  const resultsTitle = search.trim()
+    ? `${detail.noun.charAt(0).toUpperCase()}${detail.noun.slice(1)} para “${search.trim()}”`
+    : activeCategory === "Roomies"
+      ? "Habitaciones para compartir"
+      : activeCategory === "Depas"
+        ? "Departamentos en Lima"
+        : activeCategory === "Airbnb"
+          ? "Alojamientos para tu próxima estadía"
+          : "Transporte verificado en Lima";
+  const singularNoun: Record<Category, string> = { Roomies: "habitación", Depas: "departamento", Airbnb: "alojamiento", Transporte: "servicio" };
+  const filterButtonCount = activeCategory === "Depas"
+    ? activeDepaFilterCount
+    : (maxPrice ? 1 : 0) + (activeCategory === "Transporte" && service !== "Todos" ? 1 : 0);
+  const activeFilterChips: Array<{ key: string; label: string; clear: () => void }> = [];
+  if (search.trim()) activeFilterChips.push({ key: "search", label: search.trim(), clear: () => setSearch("") });
+  if (bedrooms !== "Todos" && activeCategory === "Depas") activeFilterChips.push({ key: "bedrooms", label: bedroomSummary, clear: () => setBedrooms("Todos") });
+  if ((minPrice || maxPrice) && activeCategory === "Depas") activeFilterChips.push({ key: "budget", label: budgetSummary, clear: () => { setMinPrice(""); setMaxPrice(""); } });
+  if (maxPrice && activeCategory !== "Roomies" && activeCategory !== "Depas") activeFilterChips.push({ key: "budget", label: `Hasta S/ ${Number(maxPrice).toLocaleString("es-PE")}`, clear: () => setMaxPrice("") });
+  if (activeCategory === "Depas") selectedDepaFeatures.forEach((feature) => activeFilterChips.push({ key: feature, label: feature, clear: () => toggleDepaFeature(feature) }));
+  if (activeCategory === "Transporte" && service !== "Todos") activeFilterChips.push({ key: "service", label: service, clear: () => setService("Todos") });
 
   const selectedGallery = selectedListing ? listingImages(selectedListing) : [];
   const safeSelectedImageIndex = selectedGallery.length
@@ -694,6 +890,7 @@ export default function Home() {
 
   function changeCategory(category: Category) {
     setActiveCategory(category);
+    setSort("recommended");
     setSearch("");
     setService("Todos");
     setMinPrice("");
@@ -757,7 +954,9 @@ export default function Home() {
   }
 
   async function toggleFavorite(id: number) {
+    if (favoriteMutations.includes(id)) return;
     const alreadyFavorite = favorites.includes(id);
+    setFavoriteMutations((current) => [...current, id]);
     setFavorites((current) => alreadyFavorite
       ? current.filter((favoriteId) => favoriteId !== id)
       : [...current, id]);
@@ -767,13 +966,16 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ listingId: id }),
       });
-      if (!response.ok) throw new Error("No se pudo guardar");
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "No se pudo guardar");
       flashNotice(alreadyFavorite ? "Quitado de tus favoritos" : "Guardado en tus favoritos");
-    } catch {
+    } catch (error) {
       setFavorites((current) => alreadyFavorite
         ? [...current, id]
         : current.filter((favoriteId) => favoriteId !== id));
-      flashNotice("No pudimos actualizar tus favoritos");
+      flashNotice(error instanceof Error ? error.message : "No pudimos actualizar tus favoritos", "error");
+    } finally {
+      setFavoriteMutations((current) => current.filter((listingId) => listingId !== id));
     }
   }
 
@@ -786,9 +988,11 @@ export default function Home() {
     });
   }
 
-  function flashNotice(message: string) {
+  function flashNotice(message: string, tone: "success" | "error" = "success") {
+    if (noticeTimeoutRef.current !== null) window.clearTimeout(noticeTimeoutRef.current);
     setNotice(message);
-    window.setTimeout(() => setNotice(""), 2400);
+    setNoticeTone(tone);
+    noticeTimeoutRef.current = window.setTimeout(() => setNotice(""), 3000);
   }
 
   function resetFilters() {
@@ -978,24 +1182,47 @@ export default function Home() {
 
       <main className="results-layout" id="results">
         <section className="list-panel">
-          {activeCategory === "Depas" ? (
-            <div className="depa-results-heading">
-              <div><h1>{search ? `Departamentos en ${search}` : "Departamentos en Lima"}</h1><p>{loadedCategory !== activeCategory ? "Buscando opciones…" : `${visibleListings.length} ${visibleListings.length === 1 ? "proyecto disponible" : "proyectos disponibles"} · Alquiler mensual con contacto directo`}</p></div>
-              <button onClick={openDepaFilters}><FilterIcon /><span>Filtros</span>{activeDepaFilterCount > 0 && <b>{activeDepaFilterCount}</b>}</button>
+          <div className="results-toolbar" aria-busy={isRefreshingListings}>
+            <div className="results-copy">
+              <span className="results-kicker">{activeCategory === "Depas" ? "Alquiler mensual" : activeCategory === "Airbnb" ? "Estadías por noche" : activeCategory === "Transporte" ? "Servicios afiliados" : "Contacto directo"}</span>
+              <h1>{resultsTitle}</h1>
+              <p aria-live="polite">
+                {isInitialListingsLoad ? "Buscando las mejores opciones…" : `${resultsTotal} ${resultsTotal === 1 ? singularNoun[activeCategory] : detail.noun} ${resultsTotal === 1 ? "disponible" : "disponibles"} · Sin comisiones extras`}
+                {isRefreshingListings && <span className="refreshing-label"><i />Actualizando</span>}
+              </p>
             </div>
-          ) : <h1 className="sr-only">{loadedCategory !== activeCategory ? "Buscando opciones…" : `${visibleListings.length} ${detail.noun}${search ? ` para ${search}` : " disponibles"}`}</h1>}
+            <div className="results-actions">
+              <label className="sort-control"><span>Ordenar por</span><select value={sort} onChange={(event) => setSort(event.target.value as ListingSort)} aria-label="Ordenar resultados">{sortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              {activeCategory !== "Roomies" && <button className="toolbar-filter" onClick={() => activeCategory === "Depas" ? openDepaFilters() : setShowFilters(true)}><FilterIcon /><span>Filtros</span>{filterButtonCount > 0 && <b>{filterButtonCount}</b>}</button>}
+            </div>
+          </div>
 
-          {visibleListings.length > 0 ? (
+          {activeFilterChips.length > 0 && <div className="active-filter-chips" aria-label="Filtros activos">{activeFilterChips.map((chip) => <button key={chip.key} onClick={chip.clear}>{chip.label}<span aria-hidden="true">×</span><span className="sr-only">Quitar filtro</span></button>)}<button className="clear-all-chip" onClick={resetFilters}>Limpiar todo</button></div>}
+
+          {listingsStatus === "error" && <div className="results-error" role="alert"><div><strong>No pudimos actualizar los anuncios</strong><span>{listingsError}. Puedes seguir viendo las opciones disponibles.</span></div><button onClick={() => setRetryListings((value) => value + 1)}>Reintentar</button></div>}
+
+          {isInitialListingsLoad ? (
+            <div className={`listing-grid ${activeCategory === "Depas" ? "depa-listing-grid" : ""}`} aria-label="Cargando anuncios">{Array.from({ length: activeCategory === "Depas" ? 6 : 4 }, (_, index) => <ListingSkeleton key={index} />)}</div>
+          ) : visibleListings.length > 0 ? (
             <div className={`listing-grid ${activeCategory === "Depas" ? "depa-listing-grid" : ""}`}>
-              {visibleListings.map((listing) => {
+              {visibleListings.map((listing, listingIndex) => {
                 const images = listingImages(listing);
                 const imageIndex = Math.min(galleryIndexes[listing.id] ?? 0, images.length - 1);
                 return (
                 <article key={listing.id} className={`listing-card ${activeCategory === "Depas" ? "depa-card" : ""}`} onClick={() => openListing(listing)}>
                   <div className="listing-image-wrap">
-                    <img src={imageUrl(images[imageIndex] ?? listing.image, 900)} alt={`${listing.title}, fotografía ${imageIndex + 1}`} className="listing-image" />
+                    <img
+                      src={imageUrl(images[imageIndex] ?? listing.image, 900)}
+                      srcSet={`${imageUrl(images[imageIndex] ?? listing.image, 480)} 480w, ${imageUrl(images[imageIndex] ?? listing.image, 900)} 900w, ${imageUrl(images[imageIndex] ?? listing.image, 1200)} 1200w`}
+                      sizes={activeCategory === "Depas" ? "(max-width: 700px) 92vw, (max-width: 1050px) 46vw, 31vw" : "(max-width: 700px) 92vw, (max-width: 1050px) 46vw, 24vw"}
+                      alt={`${listing.title}, fotografía ${imageIndex + 1}`}
+                      className="listing-image"
+                      loading={listingIndex < 4 ? "eager" : "lazy"}
+                      decoding="async"
+                      fetchPriority={listingIndex < 2 ? "high" : "auto"}
+                    />
                     {listing.badge && <span className="listing-badge">{listing.badge}</span>}
-                    <button className={`favorite-button ${favorites.includes(listing.id) ? "is-favorite" : ""}`} onClick={(event) => { event.stopPropagation(); toggleFavorite(listing.id); }} aria-label={favorites.includes(listing.id) ? "Quitar de favoritos" : "Guardar en favoritos"}>{favorites.includes(listing.id) ? "♥" : "♡"}</button>
+                    <button disabled={favoriteMutations.includes(listing.id)} className={`favorite-button ${favorites.includes(listing.id) ? "is-favorite" : ""}`} onClick={(event) => { event.stopPropagation(); toggleFavorite(listing.id); }} aria-label={favorites.includes(listing.id) ? "Quitar de favoritos" : "Guardar en favoritos"} aria-pressed={favorites.includes(listing.id)}>{favoriteMutations.includes(listing.id) ? "…" : favorites.includes(listing.id) ? "♥" : "♡"}</button>
                     <button className="carousel-arrow" disabled={images.length < 2} onClick={(event) => { event.stopPropagation(); moveGallery(listing, 1); }} aria-label={`Siguiente fotografía de ${listing.title}`}>›</button>
                     {images.length > 1 && <div className="image-dots" aria-label={`Fotografía ${imageIndex + 1} de ${images.length}`}>
                       {images.map((_, index) => <button key={`${listing.id}-${index}`} className={index === imageIndex ? "active" : ""} onClick={(event) => { event.stopPropagation(); setGalleryIndexes((current) => ({ ...current, [listing.id]: index })); }} aria-label={`Ver fotografía ${index + 1}`} aria-current={index === imageIndex ? "true" : undefined} />)}
@@ -1004,7 +1231,7 @@ export default function Home() {
                   {activeCategory === "Depas" ? (() => {
                     const details = depaDetails(listing);
                     return <div className="listing-copy depa-copy">
-                      <div className="depa-title-row"><h2>{listing.title}</h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
+                      <div className="depa-title-row"><h2><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
                       <p className="depa-status"><strong>{details.delivery}</strong><span>·</span>{details.availability}</p>
                       <p className="depa-rent"><span>Alquiler desde</span><strong>{money.format(listing.price)}</strong></p>
                       <p className="depa-address">{details.address}</p>
@@ -1017,17 +1244,17 @@ export default function Home() {
                       </div>
                       <div className="depa-card-footer">
                         <div className="depa-feature-preview">{details.features.slice(0, 3).map((feature) => <span key={feature}>{feature}</span>)}</div>
-                        <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`} title={`Chatear con ${listing.ownerName} en WhatsApp`}><WhatsappIcon /></a>
+                        <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`} title={`Chatear con ${listing.ownerName} en WhatsApp`}><WhatsappIcon /><span>WhatsApp</span></a>
                       </div>
                     </div>;
                   })() : <div className="listing-copy">
-                      <div className="card-title-row"><h2>{listing.title}</h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
+                      <div className="card-title-row"><h2><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
                       <p className="listing-location">{listing.location}</p>
                       <p className="listing-meta">{listing.meta}</p>
                       <p className="listing-dates">{dateLabel}</p>
                       <div className="price-row">
                         <div><p><strong>{money.format(listing.price)}</strong> <span>{listing.priceLabel}</span></p><span className="cancellation-tag">Contacto directo</span></div>
-                        <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`} title={`Chatear con ${listing.ownerName} en WhatsApp`}><WhatsappIcon /></a>
+                        <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`} title={`Chatear con ${listing.ownerName} en WhatsApp`}><WhatsappIcon /><span>WhatsApp</span></a>
                       </div>
                     </div>}
                 </article>
@@ -1055,7 +1282,7 @@ export default function Home() {
         <div className="footer-bottom"><span>© 2026 roomies20 · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
       </footer>
 
-      {notice && <div className="toast" role="status"><span>✓</span>{notice}</div>}
+      <div className={`toast ${notice ? "visible" : ""} ${noticeTone === "error" ? "error" : ""}`} role={noticeTone === "error" ? "alert" : "status"} aria-live="polite" aria-atomic="true"><span>{noticeTone === "error" ? "!" : "✓"}</span>{notice}</div>
 
       {showFilters && (
         <Modal onClose={() => setShowFilters(false)} className="filters-modal">
@@ -1094,7 +1321,7 @@ export default function Home() {
         />
       )}
 
-      {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => { setListingsFromDb((current) => [listing, ...current]); setActiveCategory(listing.category); setShowPublish(false); flashNotice("Tu publicación fue guardada"); }} />}
+      {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => { setListingsFromDb((current) => [listing, ...current]); setActiveCategory(listing.category); setRetryListings((value) => value + 1); setShowPublish(false); flashNotice("Tu publicación fue guardada"); }} />}
 
       {selectedListing && (
         <Modal onClose={() => setSelectedListing(null)} className="detail-modal">
@@ -1137,7 +1364,56 @@ export default function Home() {
 }
 
 function Modal({ children, onClose, className = "" }: { children: React.ReactNode; onClose: () => void; className?: string }) {
-  return <div className="modal-backdrop" onClick={onClose}><div className={`modal ${className}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>{children}</div></div>;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = window.requestAnimationFrame(() => {
+      const firstFocusable = dialogRef.current?.querySelector<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])");
+      (firstFocusable ?? dialogRef.current)?.focus();
+    });
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+      if (!focusable.length) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, []);
+
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeRef.current(); }}><div ref={dialogRef} className={`modal ${className}`} role="dialog" aria-modal="true" aria-label="Ventana de roomies20" tabIndex={-1}>{children}</div></div>;
 }
 
 function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: AuthUser | null; onClose: () => void; onAuthenticated: (user: AuthUser) => void; onLoggedOut: () => void }) {

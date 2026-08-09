@@ -7,16 +7,20 @@ import argparse
 import base64
 import binascii
 import cgi
+from collections import defaultdict, deque
 import hashlib
 import hmac
 import json
+import math
 import mimetypes
 import os
 import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
+import unicodedata
 import uuid
 from datetime import date
 from http import HTTPStatus
@@ -61,6 +65,25 @@ DEPA_FEATURES = {
     "Terraza",
     "Ascensor",
 }
+LISTING_SORTS = {
+    "recommended": "(badge IS NOT NULL) DESC, rating DESC, reviews DESC, created_at DESC, id DESC",
+    "newest": "created_at DESC, id DESC",
+    "price_asc": "price ASC, rating DESC, id DESC",
+    "price_desc": "price DESC, rating DESC, id DESC",
+    "rating": "rating DESC, reviews DESC, id DESC",
+}
+RATE_LIMIT_RULES = {
+    ("POST", "/api/auth/register"): (8, 300),
+    ("POST", "/api/auth/login"): (12, 300),
+    ("POST", "/api/auth/google"): (20, 300),
+    ("POST", "/api/listings"): (12, 3600),
+    ("POST", "/api/uploads"): (12, 3600),
+    ("POST", "/api/favorites"): (60, 60),
+    ("DELETE", "/api/favorites"): (60, 60),
+    ("POST", "/api/inquiries"): (20, 60),
+}
+_RATE_LIMIT_BUCKETS: dict[tuple[str, str, str], deque[float]] = defaultdict(deque)
+_RATE_LIMIT_LOCK = threading.Lock()
 DEPA_SEED_LISTINGS = (
     {
         "title": "Edificios en Miraflores",
@@ -129,6 +152,106 @@ DEPA_SEED_LISTINGS = (
         "details": {"delivery": "Disponible ahora", "availability": "Contrato desde 6 meses", "address": "Av. Brasil 1850, Pueblo Libre, Lima", "units": 90, "areaTotal": "46 a 68 m² tot.", "areaCovered": "44 a 64 m² techada", "bedroomsMin": 1, "bedroomsMax": 2, "bathroomsMin": 1, "bathroomsMax": 1, "features": ["Permite mascotas", "Área de lavandería", "Balcón", "Ascensor"]},
     },
 )
+MARKETPLACE_SEED_LISTINGS = (
+    {
+        "category": "Roomies", "title": "Habitación con luz y calma", "location": "Barranco, Lima",
+        "description": "Habitación privada dentro de un depa compartido, con cocina equipada, escritorio y una comunidad tranquila.",
+        "image": "https://images.unsplash.com/photo-1505693416388-ac5ce068fe85",
+        "gallery": ["https://images.unsplash.com/photo-1505693416388-ac5ce068fe85", "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267"],
+        "price": 780, "price_label": "por mes", "rating": 4.9, "reviews": 18,
+        "meta": "1 cama · 1 baño compartido · Amoblado", "badge": "Favorito entre roomies",
+        "owner_name": "Carla", "owner_whatsapp": "51999888777", "service": None,
+    },
+    {
+        "category": "Roomies", "title": "Roomie en depa creativo", "location": "Miraflores, Lima",
+        "description": "Espacio listo para mudarte, con áreas comunes amplias, buena conexión y compañeros que respetan tus tiempos.",
+        "image": "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267",
+        "gallery": ["https://images.unsplash.com/photo-1522708323590-d24dbb6b0267", "https://images.unsplash.com/photo-1497366811353-6870744d04b2"],
+        "price": 920, "price_label": "por mes", "rating": 5, "reviews": 12,
+        "meta": "1 cama · 1 baño · Incluye servicios", "badge": "Respuesta rápida",
+        "owner_name": "Mateo", "owner_whatsapp": "51999111222", "service": None,
+    },
+    {
+        "category": "Roomies", "title": "Cuarto amplio cerca al parque", "location": "San Miguel, Lima",
+        "description": "Habitación espaciosa con ventana exterior, clóset y acceso a terraza compartida.",
+        "image": "https://images.unsplash.com/photo-1505691938895-1758d7feb511", "gallery": [],
+        "price": 650, "price_label": "por mes", "rating": 4.8, "reviews": 9,
+        "meta": "1 cama · 1 baño compartido · Sin amoblar", "badge": None,
+        "owner_name": "Andrea", "owner_whatsapp": "51988777666", "service": None,
+    },
+    {
+        "category": "Roomies", "title": "Habitación privada con escritorio", "location": "Jesús María, Lima",
+        "description": "Ideal para estudiar o trabajar desde casa. Cocina y lavandería compartidas, edificio seguro.",
+        "image": "https://images.unsplash.com/photo-1524758631624-e2822e304c36", "gallery": [],
+        "price": 720, "price_label": "por mes", "rating": 4.9, "reviews": 21,
+        "meta": "1 cama · 1 baño · Escritorio", "badge": None,
+        "owner_name": "Luis", "owner_whatsapp": "51987654321", "service": None,
+    },
+    {
+        "category": "Airbnb", "title": "Departamento con diseño en Barranco", "location": "Barranco, Lima",
+        "description": "Departamento con interiores cálidos, detalles locales y todo lo necesario para una escapada con personalidad.",
+        "image": "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c", "gallery": [],
+        "price": 240, "price_label": "por noche", "rating": 4.98, "reviews": 46,
+        "meta": "2 huéspedes · 1 habitación · Wifi", "badge": "Favorito entre huéspedes",
+        "owner_name": "Sofía", "owner_whatsapp": "51999888777", "service": None,
+    },
+    {
+        "category": "Airbnb", "title": "Suite luminosa cerca al malecón", "location": "Miraflores, Lima",
+        "description": "Un refugio con balcón, cama king y acceso caminando al malecón y los mejores cafés.",
+        "image": "https://images.unsplash.com/photo-1600566753086-00f18fb6b3ea", "gallery": [],
+        "price": 380, "price_label": "por noche", "rating": 4.96, "reviews": 32,
+        "meta": "2 huéspedes · 1 habitación · Vista al mar", "badge": "Reserva flexible",
+        "owner_name": "Camila", "owner_whatsapp": "51992223344", "service": None,
+    },
+    {
+        "category": "Airbnb", "title": "Casa tranquila para desconectar", "location": "Cieneguilla, Lima",
+        "description": "Casa rodeada de verde para bajar el ritmo, leer y compartir una estadía diferente.",
+        "image": "https://images.unsplash.com/photo-1600585154340-be6161a56a0c", "gallery": [],
+        "price": 420, "price_label": "por noche", "rating": 4.9, "reviews": 19,
+        "meta": "4 huéspedes · 2 habitaciones · Piscina", "badge": None,
+        "owner_name": "Nicolás", "owner_whatsapp": "51995556677", "service": None,
+    },
+    {
+        "category": "Airbnb", "title": "Mini depa con diseño local", "location": "Centro de Lima",
+        "description": "Un espacio compacto, bonito y funcional para conocer la ciudad desde el corazón.",
+        "image": "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3", "gallery": [],
+        "price": 190, "price_label": "por noche", "rating": 4.85, "reviews": 27,
+        "meta": "2 huéspedes · 1 habitación · Cocina", "badge": None,
+        "owner_name": "Mariana", "owner_whatsapp": "51991119911", "service": None,
+    },
+    {
+        "category": "Transporte", "title": "Mudanza segura para tu depa", "location": "Lima Metropolitana",
+        "description": "Equipo puntual para mudanzas de hogar, oficina o habitación. Cuidamos cada caja y coordinamos por WhatsApp.",
+        "image": "https://images.unsplash.com/photo-1601584115197-04ecc0da31d8", "gallery": [],
+        "price": 180, "price_label": "por servicio", "rating": 4.9, "reviews": 36,
+        "meta": "Camión 3 t · 12 m³ · 2 ayudantes", "badge": "Más solicitado",
+        "owner_name": "Mudanzas Norte", "owner_whatsapp": "51999911111", "service": "Mudanza",
+    },
+    {
+        "category": "Transporte", "title": "Furgón para mudanzas medianas", "location": "Lima y Callao",
+        "description": "Furgón cerrado para traslados de hasta 1.5 toneladas, con seguimiento y carga protegida.",
+        "image": "https://images.unsplash.com/photo-1586864387967-d02ef85d93e8", "gallery": [],
+        "price": 140, "price_label": "por servicio", "rating": 4.8, "reviews": 22,
+        "meta": "Furgón 1.5 t · 8 m³ · Carga protegida", "badge": None,
+        "owner_name": "Ruta 24", "owner_whatsapp": "51998881122", "service": "Mudanza",
+    },
+    {
+        "category": "Transporte", "title": "SUV premium para corporativo", "location": "Lima Metropolitana",
+        "description": "Traslados corporativos en camioneta premium 2026, conductor profesional y vehículo verificado.",
+        "image": "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2", "gallery": [],
+        "price": 260, "price_label": "por servicio", "rating": 5, "reviews": 17,
+        "meta": "SUV premium 2026 · 4 pasajeros · Verificado", "badge": "Vehículo verificado",
+        "owner_name": "Elite Drive", "owner_whatsapp": "51997776655", "service": "Corporativo",
+    },
+    {
+        "category": "Transporte", "title": "Camioneta ejecutiva 2025", "location": "Lima · Aeropuerto · Eventos",
+        "description": "Servicio premium para reuniones, aeropuerto y eventos. Reserva por horas o por jornada.",
+        "image": "https://images.unsplash.com/photo-1551830820-330a71b99659", "gallery": [],
+        "price": 310, "price_label": "por servicio", "rating": 4.95, "reviews": 14,
+        "meta": "Camioneta 2025 · 6 pasajeros · Verificado", "badge": None,
+        "owner_name": "Prime Mobility", "owner_whatsapp": "51996665544", "service": "Corporativo",
+    },
+)
 
 
 def connect() -> sqlite3.Connection:
@@ -136,7 +259,16 @@ def connect() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.create_function("search_normalize", 1, normalize_search_text, deterministic=True)
+    connection.create_function("search_matches", 2, search_matches, deterministic=True)
     return connection
+
+
+def normalize_search_text(value: object) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
 def initialize_database() -> None:
@@ -184,6 +316,10 @@ def initialize_database() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_listings_category_created_at
               ON listings (category, created_at);
+            CREATE INDEX IF NOT EXISTS idx_listings_category_price
+              ON listings (category, price);
+            CREATE INDEX IF NOT EXISTS idx_listings_category_rating
+              ON listings (category, rating DESC, reviews DESC);
             CREATE TABLE IF NOT EXISTS favorites (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               visitor_id TEXT NOT NULL,
@@ -192,6 +328,8 @@ def initialize_database() -> None:
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_favorites_visitor_listing
               ON favorites (visitor_id, listing_id);
+            CREATE INDEX IF NOT EXISTS idx_favorites_listing
+              ON favorites (listing_id);
             CREATE TABLE IF NOT EXISTS inquiries (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               visitor_id TEXT NOT NULL,
@@ -201,6 +339,8 @@ def initialize_database() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_inquiries_listing_created_at
               ON inquiries (listing_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_inquiries_visitor_created_at
+              ON inquiries (visitor_id, created_at);
             """
         )
         listing_columns = {
@@ -237,6 +377,26 @@ def initialize_database() -> None:
               WHERE google_sub IS NOT NULL
             """
         )
+        database.executescript(
+            """
+            DELETE FROM favorites
+              WHERE NOT EXISTS (SELECT 1 FROM listings WHERE listings.id = favorites.listing_id);
+            DELETE FROM inquiries
+              WHERE NOT EXISTS (SELECT 1 FROM listings WHERE listings.id = inquiries.listing_id);
+            CREATE TRIGGER IF NOT EXISTS validate_favorite_listing
+              BEFORE INSERT ON favorites
+              WHEN NOT EXISTS (SELECT 1 FROM listings WHERE id = NEW.listing_id)
+              BEGIN
+                SELECT RAISE(ABORT, 'listing_not_found');
+              END;
+            CREATE TRIGGER IF NOT EXISTS validate_inquiry_listing
+              BEFORE INSERT ON inquiries
+              WHEN NOT EXISTS (SELECT 1 FROM listings WHERE id = NEW.listing_id)
+              BEGIN
+                SELECT RAISE(ABORT, 'listing_not_found');
+              END;
+            """
+        )
         depa_count = database.execute(
             "SELECT COUNT(*) FROM listings WHERE category = 'Depas'"
         ).fetchone()[0]
@@ -266,6 +426,37 @@ def initialize_database() -> None:
                         json.dumps(listing["details"], ensure_ascii=False),
                     )
                     for listing in reversed(DEPA_SEED_LISTINGS)
+                ],
+            )
+        for category in ("Roomies", "Airbnb", "Transporte"):
+            category_count = database.execute(
+                "SELECT COUNT(*) FROM listings WHERE category = ?", (category,)
+            ).fetchone()[0]
+            if category_count:
+                continue
+            seeds = [
+                listing for listing in MARKETPLACE_SEED_LISTINGS
+                if listing["category"] == category
+            ]
+            database.executemany(
+                """
+                INSERT INTO listings
+                  (category, title, location, description, image, gallery, price,
+                   price_label, rating, reviews, meta, badge, owner_name,
+                   owner_whatsapp, service, details_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}')
+                """,
+                [
+                    (
+                        listing["category"], listing["title"], listing["location"],
+                        listing["description"], listing["image"],
+                        json.dumps(listing["gallery"], ensure_ascii=False),
+                        listing["price"], listing["price_label"], listing["rating"],
+                        listing["reviews"], listing["meta"], listing["badge"],
+                        listing["owner_name"], listing["owner_whatsapp"],
+                        listing["service"],
+                    )
+                    for listing in reversed(seeds)
                 ],
             )
 
@@ -419,6 +610,212 @@ def bounded_integer(value: object, minimum: int, maximum: int, fallback: int) ->
     return min(maximum, max(minimum, number))
 
 
+SEARCH_ALIAS_FAMILIES = (
+    ("habitacion", "cuarto", "dormitorio", "roomie", "roommate"),
+    ("amoblado", "amueblado", "equipado", "muebles"),
+    ("bano", "servicio", "bathroom"),
+    ("escritorio", "oficina", "trabajo", "estudio"),
+    ("cerca", "cercano", "proximo"),
+    ("departamento", "depa", "apartamento"),
+    ("transporte", "movilidad", "traslado"),
+    ("mudanza", "carga", "camion", "camioneta"),
+)
+SEARCH_ALIASES = {
+    term: family for family in SEARCH_ALIAS_FAMILIES for term in family
+}
+SEARCH_STOP_WORDS = {
+    "busca", "buscar", "busco", "quiero", "necesito", "para", "por", "una",
+    "uno", "un", "de", "del", "en", "con", "que", "sea", "soles", "s",
+}
+
+
+def bounded_edit_distance(left: str, right: str, maximum: int = 2) -> int:
+    if left == right:
+        return 0
+    if abs(len(left) - len(right)) > maximum:
+        return maximum + 1
+    previous = list(range(len(right) + 1))
+    for left_index, left_character in enumerate(left, 1):
+        current = [left_index]
+        row_minimum = left_index
+        for right_index, right_character in enumerate(right, 1):
+            value = min(
+                current[right_index - 1] + 1,
+                previous[right_index] + 1,
+                previous[right_index - 1] + (left_character != right_character),
+            )
+            current.append(value)
+            row_minimum = min(row_minimum, value)
+        if row_minimum > maximum:
+            return maximum + 1
+        previous = current
+    return previous[-1]
+
+
+def search_matches(value: object, query: object) -> int:
+    candidate_tokens = normalize_search_text(value).split()
+    query_tokens = normalize_search_text(query).split()
+    for query_token in query_tokens:
+        alternatives = SEARCH_ALIASES.get(query_token, (query_token,))
+        found = False
+        for alternative in alternatives:
+            for candidate in candidate_tokens:
+                if (
+                    alternative == candidate
+                    or candidate.startswith(alternative)
+                    or (len(alternative) >= 4 and alternative in candidate)
+                    or (
+                        len(alternative) >= 4
+                        and bounded_edit_distance(
+                            alternative,
+                            candidate,
+                            2 if len(alternative) >= 7 else 1,
+                        ) <= (2 if len(alternative) >= 7 else 1)
+                    )
+                ):
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            return 0
+    return 1
+
+
+def optional_integer(value: str | None, minimum: int, maximum: int) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Número inválido") from error
+    if number < minimum or number > maximum:
+        raise ValueError("Número fuera de rango")
+    return number
+
+
+def image_extension_from_content(content: bytes) -> str | None:
+    if content.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "webp"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    return None
+
+
+def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row], dict[str, object]]:
+    category = parameters.get("category", [""])[0]
+    if category and category not in CATEGORIES:
+        raise ValueError("Categoría inválida")
+
+    query_text = str(parameters.get("q", [""])[0]).strip()[:120]
+    normalized_query = normalize_search_text(query_text)
+    minimum_price = optional_integer(parameters.get("minPrice", [None])[0], 0, 10_000_000)
+    maximum_price = optional_integer(parameters.get("maxPrice", [None])[0], 0, 10_000_000)
+    ceiling_match = re.search(
+        r"\b(?:hasta|maximo|max|menos de)\s+(?:s\s*)?(\d{2,7})\b",
+        normalized_query,
+    )
+    if ceiling_match and maximum_price is None:
+        maximum_price = int(ceiling_match.group(1))
+        normalized_query = normalized_query.replace(ceiling_match.group(0), " ")
+    if minimum_price is not None and maximum_price is not None and minimum_price > maximum_price:
+        raise ValueError("El precio mínimo no puede superar al máximo")
+
+    bedrooms_value = str(parameters.get("bedrooms", [""])[0]).strip()
+    bedrooms = None
+    if bedrooms_value:
+        bedrooms = 4 if bedrooms_value == "4+" else optional_integer(bedrooms_value, 1, 10)
+    service = str(parameters.get("service", [""])[0]).strip()[:40]
+    if service and service not in {"Todos", "Mudanza", "Corporativo"}:
+        raise ValueError("Servicio inválido")
+    requested_features = [
+        feature.strip()
+        for feature in str(parameters.get("features", [""])[0]).split(",")
+        if feature.strip()
+    ]
+    if any(feature not in DEPA_FEATURES for feature in requested_features):
+        raise ValueError("Característica inválida")
+
+    page = optional_integer(parameters.get("page", ["1"])[0], 1, 10_000) or 1
+    page_size = optional_integer(parameters.get("pageSize", ["12"])[0], 1, 48) or 12
+    sort = str(parameters.get("sort", ["recommended"])[0]).strip()
+    if sort not in LISTING_SORTS:
+        raise ValueError("Orden inválido")
+
+    clauses: list[str] = []
+    values: list[object] = []
+    if category:
+        clauses.append("category = ?")
+        values.append(category)
+    if minimum_price is not None:
+        clauses.append("price >= ?")
+        values.append(minimum_price)
+    if maximum_price is not None:
+        clauses.append("price <= ?")
+        values.append(maximum_price)
+    if service and service != "Todos":
+        clauses.append("service = ?")
+        values.append(service)
+    if bedrooms is not None:
+        bedroom_expression = (
+            "CASE WHEN json_valid(details_json) "
+            "THEN CAST(json_extract(details_json, '$.bedroomsMax') AS INTEGER) ELSE 0 END"
+        )
+        clauses.append(f"{bedroom_expression} >= ?")
+        values.append(bedrooms)
+        if bedrooms_value != "4+":
+            minimum_expression = (
+                "CASE WHEN json_valid(details_json) "
+                "THEN CAST(json_extract(details_json, '$.bedroomsMin') AS INTEGER) ELSE 0 END"
+            )
+            clauses.append(f"{minimum_expression} <= ?")
+            values.append(bedrooms)
+    for feature in requested_features:
+        clauses.append("details_json LIKE ?")
+        values.append(f'%"{feature}"%')
+
+    searchable_expression = (
+        "search_normalize(title || ' ' || location || ' ' || description || ' ' || "
+        "meta || ' ' || details_json || ' ' || owner_name)"
+    )
+    search_tokens = [
+        token for token in normalized_query.split() if token not in SEARCH_STOP_WORDS
+    ][:6]
+    if search_tokens:
+        clauses.append(f"search_matches({searchable_expression}, ?) = 1")
+        values.append(" ".join(search_tokens))
+
+    where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    offset = (page - 1) * page_size
+    with connect() as database:
+        category_total = database.execute(
+            "SELECT COUNT(*) FROM listings" + (" WHERE category = ?" if category else ""),
+            (category,) if category else (),
+        ).fetchone()[0]
+        total = database.execute(
+            f"SELECT COUNT(*) FROM listings{where_clause}", values
+        ).fetchone()[0]
+        rows = database.execute(
+            f"SELECT * FROM listings{where_clause} ORDER BY {LISTING_SORTS[sort]} LIMIT ? OFFSET ?",
+            [*values, page_size, offset],
+        ).fetchall()
+
+    total_pages = max(1, math.ceil(total / page_size))
+    return rows, {
+        "total": total,
+        "categoryTotal": category_total,
+        "page": page,
+        "pageSize": page_size,
+        "totalPages": total_pages,
+        "hasMore": page < total_pages,
+        "sort": sort,
+    }
+
+
 def sanitize_depa_details(value: object, location: str) -> dict[str, object]:
     source = value if isinstance(value, dict) else {}
     bedrooms_min = bounded_integer(source.get("bedroomsMin"), 1, 10, 1)
@@ -447,15 +844,47 @@ def sanitize_depa_details(value: object, location: str) -> dict[str, object]:
 
 
 class Roomies20Handler(BaseHTTPRequestHandler):
-    server_version = "roomies20/1.0"
+    server_version = "roomies20/1.1"
+
+    def handle_one_request(self) -> None:
+        self.request_id = uuid.uuid4().hex[:16]
+        super().handle_one_request()
 
     def log_message(self, format_string: str, *args: object) -> None:
-        print(f"{self.address_string()} - {format_string % args}", flush=True)
+        print(
+            json.dumps(
+                {
+                    "requestId": getattr(self, "request_id", "unknown"),
+                    "client": self.client_ip(),
+                    "message": format_string % args,
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+
+    def client_ip(self) -> str:
+        # Nginx overwrites X-Real-IP with the actual peer address. Avoid trusting
+        # a client-controlled X-Forwarded-For value for abuse controls.
+        real_ip = self.headers.get("X-Real-IP", "").strip()
+        return real_ip[:64] or self.client_address[0]
 
     def end_headers(self) -> None:
+        self.send_header("X-Request-ID", getattr(self, "request_id", "unknown"))
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; "
+            "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; "
+            "img-src 'self' data: https://images.unsplash.com https://lh3.googleusercontent.com; "
+            "connect-src 'self' https://accounts.google.com; "
+            "frame-src https://accounts.google.com; object-src 'none'; base-uri 'self'; "
+            "form-action 'self'; frame-ancestors 'self'",
+        )
         super().end_headers()
 
     def send_json(
@@ -465,12 +894,25 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         visitor_id: str | None = None,
         session_token: str | None = None,
         clear_session: bool = False,
+        cache_control: str = "no-store",
+        etag: str | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        if etag and self.headers.get("If-None-Match") == etag:
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
+        if etag:
+            self.send_header("ETag", etag)
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         if visitor_id:
             self.send_header(
                 "Set-Cookie",
@@ -490,6 +932,45 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             )
         self.end_headers()
         self.wfile.write(body)
+
+    def send_api_error(
+        self,
+        message: str,
+        status: HTTPStatus,
+        code: str,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
+        self.send_json(
+            {"error": message, "code": code, "requestId": self.request_id},
+            status,
+            extra_headers=extra_headers,
+        )
+
+    def check_rate_limit(self, method: str, path: str) -> bool:
+        rule = RATE_LIMIT_RULES.get((method, path))
+        if rule is None:
+            return True
+        maximum, window_seconds = rule
+        now = time.monotonic()
+        key = (method, path, self.client_ip())
+        with _RATE_LIMIT_LOCK:
+            bucket = _RATE_LIMIT_BUCKETS[key]
+            while bucket and bucket[0] <= now - window_seconds:
+                bucket.popleft()
+            if len(bucket) >= maximum:
+                retry_after = max(1, math.ceil(window_seconds - (now - bucket[0])))
+            else:
+                bucket.append(now)
+                retry_after = 0
+        if retry_after:
+            self.send_api_error(
+                "Demasiados intentos. Espera un momento y vuelve a intentarlo.",
+                HTTPStatus.TOO_MANY_REQUESTS,
+                "rate_limited",
+                {"Retry-After": str(retry_after)},
+            )
+            return False
+        return True
 
     def read_json(self) -> dict[str, object]:
         if not self.headers.get("Content-Type", "").lower().startswith("application/json"):
@@ -555,7 +1036,16 @@ class Roomies20Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self.send_json({"ok": True, "database": DATABASE_PATH.exists()})
+            try:
+                with connect() as database:
+                    database.execute("SELECT 1").fetchone()
+                self.send_json({"ok": True, "database": True})
+            except sqlite3.Error:
+                self.send_api_error(
+                    "La base de datos no está disponible.",
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "database_unavailable",
+                )
             return
         if parsed.path == "/api/auth/config":
             self.send_json(
@@ -566,16 +1056,23 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             )
             return
         if parsed.path == "/api/listings":
-            category = parse_qs(parsed.query).get("category", [None])[0]
-            query = "SELECT * FROM listings"
-            values: tuple[object, ...] = ()
-            if category in CATEGORIES:
-                query += " WHERE category = ?"
-                values = (category,)
-            query += " ORDER BY created_at DESC, id DESC LIMIT 48"
-            with connect() as database:
-                rows = database.execute(query, values).fetchall()
-            self.send_json({"listings": [listing_dict(row) for row in rows], "source": "database"})
+            try:
+                rows, metadata = listings_query(parse_qs(parsed.query, keep_blank_values=True))
+            except ValueError as error:
+                self.send_api_error(str(error), HTTPStatus.BAD_REQUEST, "invalid_filters")
+                return
+            payload = {
+                "listings": [listing_dict(row) for row in rows],
+                "meta": metadata,
+                "source": "database",
+            }
+            serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+            etag = f'"{hashlib.sha256(serialized).hexdigest()[:24]}"'
+            self.send_json(
+                payload,
+                cache_control="public, max-age=30, stale-while-revalidate=120",
+                etag=etag,
+            )
             return
         if parsed.path == "/api/auth/me":
             user = self.authenticated_user()
@@ -597,12 +1094,14 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             self.serve_upload(parsed.path)
             return
         if parsed.path.startswith("/api/"):
-            self.send_json({"error": "Ruta no encontrada."}, HTTPStatus.NOT_FOUND)
+            self.send_api_error("Ruta no encontrada.", HTTPStatus.NOT_FOUND, "not_found")
             return
         self.serve_static(parsed.path)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if not self.check_rate_limit("POST", parsed.path):
+            return
         try:
             if parsed.path == "/api/auth/register":
                 self.register_user()
@@ -621,16 +1120,31 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/uploads":
                 self.create_upload()
             else:
-                self.send_json({"error": "Ruta no encontrada."}, HTTPStatus.NOT_FOUND)
+                self.send_api_error("Ruta no encontrada.", HTTPStatus.NOT_FOUND, "not_found")
         except (ValueError, json.JSONDecodeError):
-            self.send_json({"error": "La solicitud no es válida."}, HTTPStatus.BAD_REQUEST)
+            self.send_api_error(
+                "La solicitud no es válida.", HTTPStatus.BAD_REQUEST, "invalid_request"
+            )
         except Exception as error:  # keep API failures private but logged
-            print(f"API error: {error!r}", flush=True)
-            self.send_json({"error": "No se pudo completar la operación."}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            print(
+                json.dumps(
+                    {"requestId": self.request_id, "error": repr(error)},
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            self.send_api_error(
+                "No se pudo completar la operación.",
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "internal_error",
+            )
 
     def do_DELETE(self) -> None:  # noqa: N802
-        if urlparse(self.path).path != "/api/favorites":
-            self.send_json({"error": "Ruta no encontrada."}, HTTPStatus.NOT_FOUND)
+        path = urlparse(self.path).path
+        if path != "/api/favorites":
+            self.send_api_error("Ruta no encontrada.", HTTPStatus.NOT_FOUND, "not_found")
+            return
+        if not self.check_rate_limit("DELETE", path):
             return
         try:
             payload = self.read_json()
@@ -647,7 +1161,9 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 {"saved": False}, visitor_id=visitor_id if is_new else None
             )
         except (ValueError, json.JSONDecodeError):
-            self.send_json({"error": "Publicación inválida."}, HTTPStatus.BAD_REQUEST)
+            self.send_api_error(
+                "Publicación inválida.", HTTPStatus.BAD_REQUEST, "invalid_listing"
+            )
 
     def register_user(self) -> None:
         payload = self.read_json()
@@ -854,8 +1370,13 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         if (
             category not in CATEGORIES
             or not all((title, location, description, owner_name))
-            or len(owner_whatsapp) < 8
+            or len(title) > 120
+            or len(location) > 160
+            or len(description) > 2_000
+            or len(owner_name) > 80
+            or not 8 <= len(owner_whatsapp) <= 15
             or price <= 0
+            or price > 10_000_000
         ):
             self.send_json({"error": "Completa todos los campos obligatorios."}, HTTPStatus.BAD_REQUEST)
             return
@@ -904,6 +1425,16 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             return
         visitor_id, is_new = self.visitor()
         with connect() as database:
+            exists = database.execute(
+                "SELECT 1 FROM listings WHERE id = ?", (listing_id,)
+            ).fetchone()
+            if exists is None:
+                self.send_api_error(
+                    "La publicación ya no está disponible.",
+                    HTTPStatus.NOT_FOUND,
+                    "listing_not_found",
+                )
+                return
             database.execute(
                 "INSERT OR IGNORE INTO favorites (visitor_id, listing_id) VALUES (?, ?)",
                 (visitor_id, listing_id),
@@ -919,6 +1450,16 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         visitor_id, is_new = self.visitor()
         channel = "whatsapp" if payload.get("channel") == "whatsapp" else "direct"
         with connect() as database:
+            exists = database.execute(
+                "SELECT 1 FROM listings WHERE id = ?", (listing_id,)
+            ).fetchone()
+            if exists is None:
+                self.send_api_error(
+                    "La publicación ya no está disponible.",
+                    HTTPStatus.NOT_FOUND,
+                    "listing_not_found",
+                )
+                return
             database.execute(
                 "INSERT INTO inquiries (visitor_id, listing_id, channel) VALUES (?, ?, ?)",
                 (visitor_id, listing_id, channel),
@@ -950,13 +1491,21 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "Selecciona una fotografía."}, HTTPStatus.BAD_REQUEST)
             return
         mime_type = field.type or ""
-        extension = IMAGE_TYPES.get(mime_type)
-        if not extension:
+        claimed_extension = IMAGE_TYPES.get(mime_type)
+        if not claimed_extension:
             self.send_json({"error": "El archivo debe ser una imagen."}, HTTPStatus.BAD_REQUEST)
             return
         content = field.file.read(MAX_UPLOAD_BYTES + 1)
         if not content or len(content) > MAX_UPLOAD_BYTES:
             self.send_json({"error": "La imagen debe pesar menos de 8 MB."}, HTTPStatus.BAD_REQUEST)
+            return
+        extension = image_extension_from_content(content)
+        if extension is None or extension != claimed_extension:
+            self.send_api_error(
+                "El contenido del archivo no coincide con una imagen válida.",
+                HTTPStatus.BAD_REQUEST,
+                "invalid_image",
+            )
             return
         folder = date.today().isoformat()
         destination = UPLOADS_DIR / folder
