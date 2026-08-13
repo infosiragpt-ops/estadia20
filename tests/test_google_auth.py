@@ -26,7 +26,7 @@ class GoogleAuthenticationTests(unittest.TestCase):
         roomies_server.PUBLIC_DIR = Path(cls.temporary_directory.name) / "public"
         roomies_server.GOOGLE_VENDOR_DIR = roomies_server.PUBLIC_DIR / ".server_vendor"
         roomies_server.GOOGLE_CLIENT_ID = "test-client.apps.googleusercontent.com"
-        roomies_server.OWNER_EMAIL = "infosiragpt@gmail.com"
+        roomies_server.OWNER_EMAIL = "carrerajorge874@gmail.com"
         roomies_server.initialize_database()
 
         cls.original_verifier = roomies_server.verify_google_credential
@@ -59,7 +59,7 @@ class GoogleAuthenticationTests(unittest.TestCase):
     def test_google_owner_gets_admin_session_and_is_reused(self) -> None:
         roomies_server.verify_google_credential = lambda credential: {
             "sub": "google-owner-123",
-            "email": "infosiragpt@gmail.com",
+            "email": "carrerajorge874@gmail.com",
             "email_verified": True,
             "name": "Jorge Carrera",
             "picture": "https://example.com/avatar.jpg",
@@ -69,7 +69,7 @@ class GoogleAuthenticationTests(unittest.TestCase):
             "POST", "/api/auth/google", {"credential": "signed-google-token"}
         )
         self.assertEqual(status, 200)
-        self.assertEqual(payload["user"]["email"], "infosiragpt@gmail.com")
+        self.assertEqual(payload["user"]["email"], "carrerajorge874@gmail.com")
         self.assertEqual(payload["user"]["role"], "admin")
         self.assertEqual(payload["user"]["authProvider"], "google")
 

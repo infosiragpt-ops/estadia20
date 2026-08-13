@@ -13,10 +13,14 @@ import {
   type Listing,
 } from "./data";
 
+const BRAND = "Estadia20";
+const BRAND_MARK = "estadia20";
+const SUPPORT_EMAIL = "hola@estadia20.com";
+
 const categories: Array<{ id: Category; label: string; short: string }> = [
-  { id: "Roomies", label: "Roomes", short: "Habitaciones" },
+  { id: "Roomies", label: "Roomies", short: "Habitaciones" },
   { id: "Depas", label: "Depas", short: "Alquiler mensual" },
-  { id: "Airbnb", label: "Arbnb", short: "Por noche" },
+  { id: "Airbnb", label: "Estadías", short: "Por noche" },
   { id: "Transporte", label: "Transporte", short: "Mudanzas y premium" },
 ];
 
@@ -93,6 +97,43 @@ type AuthUser = {
   role: "admin" | "user";
 };
 
+type OwnedListing = Listing & {
+  createdAt?: string;
+  inquiries?: number;
+  favorites?: number;
+  ownerEmail?: string | null;
+};
+
+type AdminOverviewData = {
+  stats: {
+    listings: number;
+    byCategory: Record<string, number>;
+    users: number;
+    favorites: number;
+    inquiries: number;
+    inquiriesLast7Days: number;
+  };
+  topListings: Array<{ id: number; title: string; category: string; total: number }>;
+  recentListings: Array<{ id: number; title: string; category: string; price: number; createdAt: string }>;
+};
+
+type AdminUserRow = {
+  id: number;
+  name: string;
+  email: string;
+  authProvider: string;
+  role: string;
+  createdAt: string;
+  listings: number;
+};
+
+type AdminInquiriesData = {
+  recent: Array<{ id: number; listingId: number; channel: string; createdAt: string; title: string; category: string }>;
+  byListing: Array<{ id: number; title: string; category: string; total: number }>;
+};
+
+type PanelStatus = "loading" | "ready" | "error";
+
 type GoogleCredentialResponse = {
   credential: string;
   select_by?: string;
@@ -148,6 +189,7 @@ function loadGoogleIdentityScript() {
     }
   }).catch((error) => {
     googleIdentityScript = null;
+    document.getElementById("google-identity-services")?.remove();
     throw error;
   });
   return googleIdentityScript;
@@ -164,7 +206,7 @@ function whatsappLink(listing: Listing, stay?: { checkIn: string; checkOut: stri
     ? ` para llegar el ${formatShortDate(stay.checkIn)}, salir el ${formatShortDate(stay.checkOut)} y ${stay.guests} ${stay.guests === 1 ? "huésped" : "huéspedes"}`
     : "";
   const message = encodeURIComponent(
-    `Hola ${listing.ownerName}, vi “${listing.title}” en roomies20 y me gustaría consultar disponibilidad${stayDetails}.`,
+    `Hola ${listing.ownerName}, vi “${listing.title}” en ${BRAND} y me gustaría consultar disponibilidad${stayDetails}.`,
   );
   return `https://wa.me/${listing.ownerWhatsApp}?text=${message}`;
 }
@@ -652,6 +694,8 @@ export default function Home() {
   const [showPlans, setShowPlans] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showPublish, setShowPublish] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showMyListings, setShowMyListings] = useState(false);
   const [publishAfterLogin, setPublishAfterLogin] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
@@ -670,9 +714,14 @@ export default function Home() {
   const [noticeTone, setNoticeTone] = useState<"success" | "error">("success");
   const listingsCacheRef = useRef(new Map<string, { etag: string; payload: ListingsPayload }>());
   const noticeTimeoutRef = useRef<number | null>(null);
+  const nextPageRef = useRef(2);
+  const listingsQueryRef = useRef("");
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   const deferredSearch = useDeferredValue(search);
   const debouncedSearch = useDebouncedValue(deferredSearch, 260);
+  const debouncedMinPrice = useDebouncedValue(minPrice, 350);
+  const debouncedMaxPrice = useDebouncedValue(maxPrice, 350);
 
   const detail = categoryDetails[activeCategory];
   const airbnbNights = stayNights(checkIn, checkOut);
@@ -715,19 +764,27 @@ export default function Home() {
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   }, [activeCategory, bedrooms, checkIn, checkOut, guestCount, maxPrice, minPrice, search, selectedDepaFeatures, service, sort]);
 
-  useEffect(() => {
-    const controller = new AbortController();
+  const listingsQueryString = useMemo(() => {
     const parameters = new URLSearchParams({ category: activeCategory, pageSize: "24", sort });
     if (debouncedSearch.trim()) parameters.set("q", debouncedSearch.trim());
+    const invalidPriceRange = Boolean(
+      debouncedMinPrice && debouncedMaxPrice && Number(debouncedMinPrice) > Number(debouncedMaxPrice),
+    );
     if (activeCategory === "Depas") {
-      if (minPrice) parameters.set("minPrice", minPrice);
-      if (maxPrice) parameters.set("maxPrice", maxPrice);
+      if (debouncedMinPrice && !invalidPriceRange) parameters.set("minPrice", debouncedMinPrice);
+      if (debouncedMaxPrice) parameters.set("maxPrice", debouncedMaxPrice);
       if (bedrooms !== "Todos") parameters.set("bedrooms", bedrooms);
       if (selectedDepaFeatures.length) parameters.set("features", selectedDepaFeatures.join(","));
     }
-    if (activeCategory !== "Roomies" && activeCategory !== "Depas" && maxPrice) parameters.set("maxPrice", maxPrice);
+    if (activeCategory !== "Roomies" && activeCategory !== "Depas" && debouncedMaxPrice) parameters.set("maxPrice", debouncedMaxPrice);
     if (activeCategory === "Transporte" && service !== "Todos") parameters.set("service", service);
-    const requestUrl = `/api/listings?${parameters.toString()}`;
+    return parameters.toString();
+  }, [activeCategory, bedrooms, debouncedMaxPrice, debouncedMinPrice, debouncedSearch, selectedDepaFeatures, service, sort]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    listingsQueryRef.current = listingsQueryString;
+    const requestUrl = `/api/listings?${listingsQueryString}`;
     const cached = listingsCacheRef.current.get(requestUrl);
     queueMicrotask(() => {
       if (controller.signal.aborted) return;
@@ -737,6 +794,7 @@ export default function Home() {
 
     fetch(requestUrl, {
       signal: controller.signal,
+      cache: "no-cache",
       headers: cached?.etag ? { "If-None-Match": cached.etag } : undefined,
     })
       .then(async (response) => {
@@ -753,6 +811,7 @@ export default function Home() {
         setListingsMeta(payload.meta ?? null);
         setLoadedCategory(activeCategory);
         setListingsStatus("ready");
+        nextPageRef.current = 2;
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -764,7 +823,7 @@ export default function Home() {
       });
 
     return () => controller.abort();
-  }, [activeCategory, bedrooms, debouncedSearch, maxPrice, minPrice, retryListings, selectedDepaFeatures, service, sort]);
+  }, [activeCategory, listingsQueryString, retryListings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -818,7 +877,7 @@ export default function Home() {
     return () => document.removeEventListener("keydown", closeTransientUi);
   }, []);
 
-  const hasDatabaseCategory = loadedCategory === activeCategory && (listingsMeta?.categoryTotal ?? 0) > 0;
+  const hasDatabaseCategory = loadedCategory === activeCategory && listingsStatus !== "error";
   const categoryListings = (hasDatabaseCategory ? listingsFromDb : demoListings)
     .filter((listing) => listing.category === activeCategory);
 
@@ -1004,6 +1063,33 @@ export default function Home() {
     setSelectedDepaFeatures([]);
   }
 
+  function refreshListings() {
+    listingsCacheRef.current.clear();
+    setRetryListings((value) => value + 1);
+  }
+
+  async function loadMoreListings() {
+    if (isLoadingMore || !listingsMeta?.hasMore) return;
+    const queryAtStart = listingsQueryString;
+    setIsLoadingMore(true);
+    try {
+      const response = await fetch(`/api/listings?${listingsQueryString}&page=${nextPageRef.current}`, { cache: "no-cache" });
+      const payload = (await response.json()) as ListingsPayload;
+      if (!response.ok) throw new Error(payload.error ?? "No se pudieron cargar más anuncios");
+      if (listingsQueryRef.current !== queryAtStart) return;
+      setListingsFromDb((current) => {
+        const knownIds = new Set(current.map((listing) => listing.id));
+        return [...current, ...(payload.listings ?? []).filter((listing) => !knownIds.has(listing.id))];
+      });
+      setListingsMeta(payload.meta ?? null);
+      nextPageRef.current += 1;
+    } catch (loadError) {
+      flashNotice(loadError instanceof Error ? loadError.message : "No se pudieron cargar más anuncios", "error");
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }
+
   function requestPublish() {
     if (!currentUser) {
       setPublishAfterLogin(true);
@@ -1050,12 +1136,12 @@ export default function Home() {
     <div className="app-shell">
       <header className="market-header">
         <div className="services-top">
-          <button className="brand" onClick={() => changeCategory("Roomies")} aria-label="Ir al inicio de roomies20">
+          <button className="brand" onClick={() => changeCategory("Roomies")} aria-label={`Ir al inicio de ${BRAND}`}>
             <span className="brand-symbol"><BrandKeysIcon /></span>
-            <span>roomies20</span>
+            <span>{BRAND_MARK}</span>
           </button>
 
-          <nav className="service-nav" aria-label="Servicios de roomies20">
+          <nav className="service-nav" aria-label={`Servicios de ${BRAND}`}>
             {categories.map((category) => (
               <button key={category.id} className={`service-tab ${activeCategory === category.id ? "active" : ""}`} aria-current={activeCategory === category.id ? "page" : undefined} onClick={() => changeCategory(category.id)}>
                 <span className={`service-icon service-icon-${category.id.toLowerCase()}`}><ServiceIcon category={category.id} /></span>
@@ -1170,12 +1256,14 @@ export default function Home() {
         {showMenu && (
           <div className="menu-popover">
             <button className="menu-strong" onClick={() => { setShowLogin(true); setShowMenu(false); }}>{currentUser ? `Mi cuenta · ${currentUser.name}` : "Iniciar sesión"}</button>
+            {currentUser?.role === "admin" && <button onClick={() => { setShowAdminPanel(true); setShowMenu(false); }}>Panel de administración</button>}
+            {currentUser && <button onClick={() => { setShowMyListings(true); setShowMenu(false); }}>Mis anuncios</button>}
             <button onClick={() => { setShowPlans(true); setShowMenu(false); }}>Ver planes para publicar</button>
             <button onClick={() => { setShowFilters(true); setShowMenu(false); }}>Filtros de búsqueda</button>
             <div className="menu-divider" />
             <button onClick={() => { requestPublish(); setShowMenu(false); }}>Publicar un anuncio</button>
             <button onClick={() => { flashNotice(`${favorites.length} favoritos guardados`); setShowMenu(false); }}>Mis favoritos <span>{favorites.length}</span></button>
-            <button onClick={() => { flashNotice("Soporte directo: hola@roomies20.com"); setShowMenu(false); }}>Centro de ayuda</button>
+            <button onClick={() => { flashNotice(`Soporte directo: ${SUPPORT_EMAIL}`); setShowMenu(false); }}>Centro de ayuda</button>
           </div>
         )}
       </header>
@@ -1270,19 +1358,25 @@ export default function Home() {
             </div>
           )}
 
+          {hasDatabaseCategory && listingsMeta?.hasMore && visibleListings.length > 0 && (
+            <div className="load-more-row">
+              <button className="dark-button" disabled={isLoadingMore} onClick={loadMoreListings}>{isLoadingMore ? "Cargando…" : "Ver más anuncios"}</button>
+            </div>
+          )}
+
         </section>
       </main>
 
       <footer className="footer">
         <div className="footer-top">
-          <div><strong>Asistencia</strong><button onClick={() => flashNotice("Soporte: hola@roomies20.com")}>Centro de ayuda</button><button onClick={() => flashNotice("Próximamente: seguridad y confianza")}>Seguridad</button></div>
+          <div><strong>Asistencia</strong><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Centro de ayuda</button><button onClick={() => flashNotice("Próximamente: seguridad y confianza")}>Seguridad</button></div>
           <div><strong>Publica</strong><button onClick={requestPublish}>Anuncia tu espacio</button><button onClick={() => setShowPlans(true)}>Planes anuales</button></div>
-          <div><strong>roomies20</strong><button onClick={() => flashNotice("Muy pronto: conoce al equipo roomies20")}>Quiénes somos</button><button onClick={() => flashNotice("Soporte: hola@roomies20.com")}>Contacto</button></div>
+          <div><strong>{BRAND}</strong><button onClick={() => flashNotice(`Muy pronto: conoce al equipo ${BRAND}`)}>Quiénes somos</button><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Contacto</button></div>
         </div>
-        <div className="footer-bottom"><span>© 2026 roomies20 · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
+        <div className="footer-bottom"><span>© 2026 {BRAND} · estadia20.com · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
       </footer>
 
-      <div className={`toast ${notice ? "visible" : ""} ${noticeTone === "error" ? "error" : ""}`} role={noticeTone === "error" ? "alert" : "status"} aria-live="polite" aria-atomic="true"><span>{noticeTone === "error" ? "!" : "✓"}</span>{notice}</div>
+      <div className={`toast ${notice ? "visible" : ""} ${noticeTone === "error" ? "error" : ""}`} role={noticeTone === "error" ? "alert" : "status"} aria-live={noticeTone === "error" ? "assertive" : "polite"} aria-atomic="true"><span>{noticeTone === "error" ? "!" : "✓"}</span>{notice}</div>
 
       {showFilters && (
         <Modal onClose={() => setShowFilters(false)} className="filters-modal">
@@ -1305,7 +1399,7 @@ export default function Home() {
 
       {showPlans && (
         <Modal onClose={() => setShowPlans(false)} className="plans-modal">
-          <div className="modal-header"><div><span className="modal-kicker">Anuncia en roomies20</span><h2>Un pago anual. Cero comisiones extras.</h2></div><button className="close-button" onClick={() => setShowPlans(false)} aria-label="Cerrar planes">×</button></div>
+          <div className="modal-header"><div><span className="modal-kicker">Anuncia en {BRAND}</span><h2>Un pago anual. Cero comisiones extras.</h2></div><button className="close-button" onClick={() => setShowPlans(false)} aria-label="Cerrar planes">×</button></div>
           <p className="modal-lead">Nosotros llevamos tráfico a la plataforma y cada consulta llega directamente a ti.</p>
           <div className="plans-list">{plans.map((plan) => <button key={plan.name} onClick={() => { setShowPlans(false); requestPublish(); }}><span className="plan-icon"><Icon>{plan.icon}</Icon></span><span><strong>{plan.name}</strong><small>{plan.detail}</small></span><b>{plan.price}</b><Icon>›</Icon></button>)}</div>
           <div className="benefits"><span>✓ 12 meses publicado</span><span>✓ Contacto directo</span><span>✓ Sin comisión por reserva</span></div>
@@ -1318,7 +1412,20 @@ export default function Home() {
           onClose={() => { setShowLogin(false); setPublishAfterLogin(false); }}
           onAuthenticated={authenticated}
           onLoggedOut={loggedOut}
+          onOpenAdmin={() => { setShowLogin(false); setShowAdminPanel(true); }}
+          onOpenMyListings={() => { setShowLogin(false); setShowMyListings(true); }}
         />
+      )}
+
+      {showAdminPanel && currentUser?.role === "admin" && (
+        <AdminPanelModal onClose={() => setShowAdminPanel(false)} onListingsChanged={refreshListings} notify={flashNotice} />
+      )}
+
+      {showMyListings && currentUser && (
+        <Modal onClose={() => setShowMyListings(false)} className="admin-modal">
+          <div className="modal-header"><div><span className="modal-kicker">Tu espacio en {BRAND}</span><h2>Mis anuncios</h2></div><button className="close-button" onClick={() => setShowMyListings(false)} aria-label="Cerrar mis anuncios">×</button></div>
+          <ListingManager mode="mine" onChanged={refreshListings} notify={flashNotice} />
+        </Modal>
       )}
 
       {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => { setListingsFromDb((current) => [listing, ...current]); setActiveCategory(listing.category); setRetryListings((value) => value + 1); setShowPublish(false); flashNotice("Tu publicación fue guardada"); }} />}
@@ -1354,7 +1461,7 @@ export default function Home() {
               <div className="detail-stay-guests"><span><small>Huéspedes</small><strong>{guestCount} {guestCount === 1 ? "huésped" : "huéspedes"}</strong></span><span>{airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span></div>
               <div className="detail-stay-total"><span>{money.format(selectedListing.price)} × {airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span><strong>{money.format(selectedListing.price * airbnbNights)}</strong></div>
             </div>}
-            <div className="detail-benefits"><span>✓ Publicación verificada</span><span>✓ Trato directo</span><span>✓ Sin comisiones</span></div>
+            <div className="detail-benefits"><span>✓ Contacto directo con quien publica</span><span>✓ Coordinas por WhatsApp</span><span>✓ Sin comisiones</span></div>
             <div className="detail-footer"><div><small>{selectedListing.category === "Depas" ? "Alquiler desde" : selectedListing.category === "Airbnb" ? `Total por ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}` : "Precio"}</small><strong>{selectedListing.category === "Airbnb" ? money.format(selectedListing.price * airbnbNights) : money.format(selectedListing.price)} {selectedListing.category !== "Airbnb" && <em>{selectedListing.priceLabel}</em>}</strong></div><a className="primary-button" href={whatsappLink(selectedListing, { checkIn, checkOut, guests: guestCount })} onClick={() => trackInquiry(selectedListing.id)} target="_blank" rel="noreferrer">{selectedListing.category === "Airbnb" ? "Consultar disponibilidad" : "Contactar por WhatsApp"} <Icon>↗</Icon></a></div>
           </div>
         </Modal>
@@ -1413,10 +1520,10 @@ function Modal({ children, onClose, className = "" }: { children: React.ReactNod
     };
   }, []);
 
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeRef.current(); }}><div ref={dialogRef} className={`modal ${className}`} role="dialog" aria-modal="true" aria-label="Ventana de roomies20" tabIndex={-1}>{children}</div></div>;
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeRef.current(); }}><div ref={dialogRef} className={`modal ${className}`} role="dialog" aria-modal="true" aria-label={`Ventana de ${BRAND}`} tabIndex={-1}>{children}</div></div>;
 }
 
-function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: AuthUser | null; onClose: () => void; onAuthenticated: (user: AuthUser) => void; onLoggedOut: () => void }) {
+function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, onOpenMyListings }: { user: AuthUser | null; onClose: () => void; onAuthenticated: (user: AuthUser) => void; onLoggedOut: () => void; onOpenAdmin: () => void; onOpenMyListings: () => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [isSaving, setIsSaving] = useState(false);
@@ -1535,14 +1642,15 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: Auth
       {user?.avatarUrl
         ? <img className="account-avatar" src={user.avatarUrl} alt="" referrerPolicy="no-referrer" />
         : <span className="login-logo"><Icon>⌂</Icon></span>}
-      <span className="modal-kicker">{user?.role === "admin" ? "Cuenta administradora" : "Tu cuenta roomies20"}</span>
+      <span className="modal-kicker">{user?.role === "admin" ? "Cuenta administradora" : `Tu cuenta ${BRAND}`}</span>
       {user ? (
         <div className="account-summary">
           <h2>Hola, {user.name}</h2>
           <p>Tu sesión está activa y ya puedes publicar anuncios con tu cuenta.</p>
           <span>{user.email}{user.role === "admin" && <b>Administrador</b>}</span>
           {error && <p className="form-error">{error}</p>}
-          <button className="primary-button account-button" onClick={onClose}>Continuar <Icon>→</Icon></button>
+          {user.role === "admin" && <button className="primary-button account-button" onClick={onOpenAdmin}>Panel de administración <Icon>→</Icon></button>}
+          <button className={`${user.role === "admin" ? "dark-button" : "primary-button"} account-button`} onClick={onOpenMyListings}>Mis anuncios <Icon>→</Icon></button>
           <button className="text-action account-logout" disabled={isSaving} onClick={logout}>{isSaving ? "Cerrando…" : "Cerrar sesión"}</button>
         </div>
       ) : (
@@ -1555,7 +1663,7 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: Auth
               {googleStatus === "loading" && <span className="google-loading">Preparando acceso con Google…</span>}
               {googleStatus === "unavailable" && <span className="google-unavailable">{googleMessage}</span>}
             </div>
-            <small>Google confirma tu identidad; roomies20 crea una sesión segura en este dispositivo.</small>
+            <small>Google confirma tu identidad; {BRAND} crea una sesión segura en este dispositivo.</small>
           </div>
           {error && <p className="form-error auth-error">{error}</p>}
           <div className="auth-divider"><span>o</span></div>
@@ -1583,6 +1691,7 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut }: { user: Auth
 
 function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { category: Category; defaultOwnerName: string; onClose: () => void; onCreated: (listing: Listing) => void }) {
   const [form, setForm] = useState({ title: "", location: "", price: "", description: "", ownerName: defaultOwnerName, ownerWhatsApp: "" });
+  const [transportService, setTransportService] = useState("Mudanza");
   const [depaForm, setDepaForm] = useState({ address: "", units: "1", areaTotal: "", areaCovered: "", bedroomsMin: "1", bedroomsMax: "1", bathroomsMin: "1", bathroomsMax: "1", delivery: "Disponible ahora", availability: "Contrato de 6 a 12 meses" });
   const [depaPublishFeatures, setDepaPublishFeatures] = useState<DepaFeature[]>([]);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -1594,6 +1703,9 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
     setIsSaving(true);
     setError("");
     try {
+      if (imageFile && imageFile.size > 8 * 1024 * 1024) {
+        throw new Error("La imagen debe pesar menos de 8 MB.");
+      }
       let image: string | undefined;
       if (imageFile) {
         const imageData = new FormData();
@@ -1612,6 +1724,7 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
           category,
           price: Number(form.price),
           priceLabel: categoryDetails[category].priceLabel,
+          service: category === "Transporte" ? transportService : undefined,
           details: category === "Depas" ? {
             ...depaForm,
             address: depaForm.address || form.location,
@@ -1639,14 +1752,327 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
       <div className="modal-header"><div><span className="modal-kicker">Publicar {category.toLowerCase()}</span><h2>Haz que te encuentren</h2></div><button className="close-button" onClick={onClose} aria-label="Cerrar publicación">×</button></div>
       <p className="modal-lead">Completa los datos esenciales. Tus clientes podrán contactarte directamente.</p>
       <form onSubmit={submit}>
-        <div className="form-grid"><label>Título<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ej. Depa luminoso en Barranco" /></label><label>Ubicación<input required value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Distrito, ciudad" /></label><label>Precio en soles<input required min="1" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label><label>Tu nombre<input required value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label></div>
+        <div className="form-grid"><label>Título<input required maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ej. Depa luminoso en Barranco" /></label><label>Ubicación<input required maxLength={160} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Distrito, ciudad" /></label><label>Precio en soles<input required min="1" max="10000000" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label><label>Tu nombre<input required maxLength={80} value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label>{category === "Transporte" && <label>Tipo de servicio<select value={transportService} onChange={(event) => setTransportService(event.target.value)}><option value="Mudanza">Mudanza</option><option value="Corporativo">Corporativo</option></select></label>}</div>
         {category === "Depas" && <fieldset className="publish-depa-fields"><legend>Datos del departamento</legend><div className="form-grid"><label>Dirección exacta<input required value={depaForm.address} onChange={(event) => setDepaForm({ ...depaForm, address: event.target.value })} placeholder="Av., calle y número" /></label><label>Número de unidades<input required min="1" type="number" value={depaForm.units} onChange={(event) => setDepaForm({ ...depaForm, units: event.target.value })} /></label><label>Área total<input required value={depaForm.areaTotal} onChange={(event) => setDepaForm({ ...depaForm, areaTotal: event.target.value })} placeholder="Ej. 53 a 60 m² tot." /></label><label>Área techada<input required value={depaForm.areaCovered} onChange={(event) => setDepaForm({ ...depaForm, areaCovered: event.target.value })} placeholder="Ej. 53 a 60 m² techada" /></label><label>Dormitorios mínimos<input required min="1" max="10" type="number" value={depaForm.bedroomsMin} onChange={(event) => setDepaForm({ ...depaForm, bedroomsMin: event.target.value })} /></label><label>Dormitorios máximos<input required min={depaForm.bedroomsMin || "1"} max="10" type="number" value={depaForm.bedroomsMax} onChange={(event) => setDepaForm({ ...depaForm, bedroomsMax: event.target.value })} /></label><label>Baños mínimos<input required min="1" max="10" type="number" value={depaForm.bathroomsMin} onChange={(event) => setDepaForm({ ...depaForm, bathroomsMin: event.target.value })} /></label><label>Baños máximos<input required min={depaForm.bathroomsMin || "1"} max="10" type="number" value={depaForm.bathroomsMax} onChange={(event) => setDepaForm({ ...depaForm, bathroomsMax: event.target.value })} /></label><label>Entrega<input required value={depaForm.delivery} onChange={(event) => setDepaForm({ ...depaForm, delivery: event.target.value })} /></label><label>Disponibilidad o contrato<input required value={depaForm.availability} onChange={(event) => setDepaForm({ ...depaForm, availability: event.target.value })} /></label></div><span className="publish-feature-label">Características</span><div className="publish-feature-options">{depaFeatureOptions.map((feature) => { const selected = depaPublishFeatures.includes(feature); return <button type="button" key={feature} className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => setDepaPublishFeatures((current) => current.includes(feature) ? current.filter((item) => item !== feature) : [...current, feature])}>{selected ? "✓" : "+"} {feature}</button>; })}</div></fieldset>}
-        <label>Descripción<textarea required rows={4} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Cuenta qué hace especial a tu anuncio…" /></label>
+        <label>Descripción<textarea required rows={4} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Cuenta qué hace especial a tu anuncio…" /></label>
         <label className="image-upload">Fotografía principal<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /><span>{imageFile ? `✓ ${imageFile.name}` : "Seleccionar imagen · máximo 8 MB"}</span></label>
-        <label>WhatsApp de contacto<input required value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>
+        <label>WhatsApp de contacto<input required maxLength={20} inputMode="tel" value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>
         {error && <p className="form-error">{error}</p>}
         <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Guardando…" : "Guardar y publicar"}<Icon>→</Icon></button>
       </form>
     </Modal>
+  );
+}
+
+function categoryLabel(id: string) {
+  return categories.find((category) => category.id === id)?.label ?? id;
+}
+
+function formatAdminDate(value?: string) {
+  if (!value) return "";
+  const date = new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("es-PE", { day: "numeric", month: "short", year: "numeric" }).format(date);
+}
+
+function usePanelData<T>(url: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [status, setStatus] = useState<PanelStatus>("loading");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setStatus("loading");
+    setError("");
+    fetch(url, { signal: controller.signal, cache: "no-store" })
+      .then(async (response) => {
+        const payload = (await response.json()) as T & { error?: string };
+        if (!response.ok) throw new Error((payload as { error?: string }).error ?? "No se pudo cargar la información");
+        return payload;
+      })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        setData(payload);
+        setStatus("ready");
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        setStatus("error");
+        setError(requestError instanceof Error ? requestError.message : "No se pudo cargar la información");
+      });
+    return () => controller.abort();
+  }, [url]);
+
+  return { data, status, error };
+}
+
+function AdminPanelModal({ onClose, onListingsChanged, notify }: { onClose: () => void; onListingsChanged: () => void; notify: (message: string, tone?: "success" | "error") => void }) {
+  const [tab, setTab] = useState<"overview" | "listings" | "inquiries" | "users">("overview");
+  const tabs = [
+    { id: "overview" as const, label: "Resumen" },
+    { id: "listings" as const, label: "Anuncios" },
+    { id: "inquiries" as const, label: "Consultas" },
+    { id: "users" as const, label: "Usuarios" },
+  ];
+
+  return (
+    <Modal onClose={onClose} className="admin-modal">
+      <div className="modal-header"><div><span className="modal-kicker">Administración de {BRAND}</span><h2>Panel de administración</h2></div><button className="close-button" onClick={onClose} aria-label="Cerrar panel de administración">×</button></div>
+      <div className="admin-tabs" role="tablist" aria-label="Secciones del panel">
+        {tabs.map((item) => <button key={item.id} role="tab" aria-selected={tab === item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>)}
+      </div>
+      {tab === "overview" && <AdminOverviewTab />}
+      {tab === "listings" && <ListingManager mode="admin" onChanged={onListingsChanged} notify={notify} />}
+      {tab === "inquiries" && <AdminInquiriesTab />}
+      {tab === "users" && <AdminUsersTab />}
+    </Modal>
+  );
+}
+
+function AdminOverviewTab() {
+  const { data, status, error } = usePanelData<AdminOverviewData>("/api/admin/overview");
+  if (status === "loading") return <p className="panel-note">Cargando resumen…</p>;
+  if (status === "error" || !data) return <p className="form-error">{error || "No se pudo cargar el resumen"}</p>;
+  const { stats } = data;
+
+  return (
+    <div className="admin-section">
+      <div className="stat-grid">
+        <div className="stat-card"><strong>{stats.listings}</strong><span>Anuncios publicados</span></div>
+        <div className="stat-card"><strong>{stats.users}</strong><span>Cuentas registradas</span></div>
+        <div className="stat-card"><strong>{stats.inquiries}</strong><span>Contactos totales</span></div>
+        <div className="stat-card"><strong>{stats.inquiriesLast7Days}</strong><span>Contactos · 7 días</span></div>
+        <div className="stat-card"><strong>{stats.favorites}</strong><span>Favoritos guardados</span></div>
+      </div>
+      <h3>Anuncios por categoría</h3>
+      <ul className="admin-list">
+        {categories.map((category) => <li key={category.id}><span>{category.label}</span><b>{stats.byCategory[category.id] ?? 0}</b></li>)}
+      </ul>
+      {data.topListings.length > 0 && <>
+        <h3>Anuncios más contactados</h3>
+        <ul className="admin-list">
+          {data.topListings.map((listing) => <li key={listing.id}><span>{listing.title} <small>· {categoryLabel(listing.category)}</small></span><b>{listing.total}</b></li>)}
+        </ul>
+      </>}
+      {data.recentListings.length > 0 && <>
+        <h3>Publicaciones recientes</h3>
+        <ul className="admin-list">
+          {data.recentListings.map((listing) => <li key={listing.id}><span>{listing.title} <small>· {categoryLabel(listing.category)} · {formatAdminDate(listing.createdAt)}</small></span><b>{money.format(listing.price)}</b></li>)}
+        </ul>
+      </>}
+    </div>
+  );
+}
+
+function AdminInquiriesTab() {
+  const { data, status, error } = usePanelData<AdminInquiriesData>("/api/admin/inquiries");
+  if (status === "loading") return <p className="panel-note">Cargando consultas…</p>;
+  if (status === "error" || !data) return <p className="form-error">{error || "No se pudieron cargar las consultas"}</p>;
+  if (!data.recent.length) return <p className="panel-note">Todavía no hay consultas registradas.</p>;
+
+  return (
+    <div className="admin-section">
+      <h3>Anuncios con más consultas</h3>
+      <ul className="admin-list">
+        {data.byListing.map((row) => <li key={row.id}><span>{row.title} <small>· {categoryLabel(row.category)}</small></span><b>{row.total}</b></li>)}
+      </ul>
+      <h3>Últimas consultas</h3>
+      <ul className="admin-list">
+        {data.recent.map((row) => <li key={row.id}><span>{row.title} <small>· {row.channel === "whatsapp" ? "WhatsApp" : "Directo"}</small></span><b>{formatAdminDate(row.createdAt)}</b></li>)}
+      </ul>
+    </div>
+  );
+}
+
+function AdminUsersTab() {
+  const { data, status, error } = usePanelData<{ users: AdminUserRow[]; total?: number }>("/api/admin/users");
+  if (status === "loading") return <p className="panel-note">Cargando usuarios…</p>;
+  if (status === "error" || !data) return <p className="form-error">{error || "No se pudieron cargar los usuarios"}</p>;
+  if (!data.users.length) return <p className="panel-note">Todavía no hay cuentas registradas.</p>;
+
+  return (
+    <div className="admin-section">
+      <h3>Cuentas registradas ({data.total ?? data.users.length}{(data.total ?? 0) > data.users.length ? ` · mostrando ${data.users.length}` : ""})</h3>
+      <ul className="admin-list">
+        {data.users.map((user) => (
+          <li key={user.id}>
+            <span>{user.name} <small>· {user.email} · {user.authProvider === "google" ? "Google" : "Correo"} · {formatAdminDate(user.createdAt)}</small>{user.role === "admin" && <b className="role-chip">Admin</b>}</span>
+            <b>{user.listings} {user.listings === 1 ? "anuncio" : "anuncios"}</b>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ListingManager({ mode, onChanged, notify }: { mode: "admin" | "mine"; onChanged: () => void; notify: (message: string, tone?: "success" | "error") => void }) {
+  const isAdmin = mode === "admin";
+  const [page, setPage] = useState(1);
+  const [reload, setReload] = useState(0);
+  const [items, setItems] = useState<OwnedListing[]>([]);
+  const [meta, setMeta] = useState<{ total: number; totalPages: number } | null>(null);
+  const [status, setStatus] = useState<PanelStatus>("loading");
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState<OwnedListing | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setStatus("loading");
+    setError("");
+    const url = isAdmin ? `/api/admin/listings?page=${page}&pageSize=8` : "/api/my/listings";
+    fetch(url, { signal: controller.signal, cache: "no-store" })
+      .then(async (response) => {
+        const payload = (await response.json()) as { listings?: OwnedListing[]; meta?: { total: number; totalPages: number }; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? "No se pudieron cargar los anuncios");
+        return payload;
+      })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        const listings = payload.listings ?? [];
+        const nextMeta = payload.meta ?? null;
+        if (nextMeta && listings.length === 0 && nextMeta.total > 0 && page > nextMeta.totalPages) {
+          setPage(Math.max(1, nextMeta.totalPages));
+          return;
+        }
+        setItems(listings);
+        setMeta(nextMeta);
+        setStatus("ready");
+      })
+      .catch((requestError: unknown) => {
+        if (controller.signal.aborted) return;
+        setStatus("error");
+        setError(requestError instanceof Error ? requestError.message : "No se pudieron cargar los anuncios");
+      });
+    return () => controller.abort();
+  }, [isAdmin, page, reload]);
+
+  async function removeListing(listing: OwnedListing) {
+    if (!window.confirm(`¿Eliminar “${listing.title}”? Esta acción no se puede deshacer.`)) return;
+    setBusyId(listing.id);
+    try {
+      const response = await fetch(`/api/listings/${listing.id}`, { method: "DELETE" });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "No se pudo eliminar el anuncio");
+      notify("Anuncio eliminado");
+      setReload((value) => value + 1);
+      onChanged();
+    } catch (removeError) {
+      notify(removeError instanceof Error ? removeError.message : "No se pudo eliminar el anuncio", "error");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (status === "loading" && !items.length) return <p className="panel-note">Cargando anuncios…</p>;
+  if (status === "error") return <p className="form-error">{error}</p>;
+  if (!items.length) return <p className="panel-note">{isAdmin ? "Todavía no hay anuncios publicados." : "Todavía no publicaste ningún anuncio. Usa “Publicar un anuncio” para crear el primero."}</p>;
+
+  return (
+    <div className="admin-section">
+      {editing ? (
+        <EditListingForm
+          listing={editing}
+          isAdmin={isAdmin}
+          onCancel={() => setEditing(null)}
+          onSaved={(updated) => {
+            setEditing(null);
+            setItems((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+            notify("Anuncio actualizado");
+            onChanged();
+          }}
+        />
+      ) : (
+        <>
+          <ul className="manage-list">
+            {items.map((listing) => (
+              <li key={listing.id}>
+                <img src={imageUrl(listing.image, 180)} alt="" loading="lazy" />
+                <div>
+                  <strong>{listing.title}</strong>
+                  <span>{categoryLabel(listing.category)} · {money.format(listing.price)} {listing.priceLabel}</span>
+                  <small>
+                    {formatAdminDate(listing.createdAt)}
+                    {isAdmin && listing.ownerEmail ? ` · ${listing.ownerEmail}` : ""}
+                    {typeof listing.inquiries === "number" ? ` · ${listing.inquiries} ${listing.inquiries === 1 ? "contacto" : "contactos"}` : ""}
+                    {typeof listing.favorites === "number" ? ` · ${listing.favorites} favoritos` : ""}
+                  </small>
+                </div>
+                <div className="manage-actions">
+                  <button className="text-action" onClick={() => setEditing(listing)}>Editar</button>
+                  <button className="danger-action" disabled={busyId === listing.id} onClick={() => removeListing(listing)}>{busyId === listing.id ? "Eliminando…" : "Eliminar"}</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {isAdmin && meta && meta.totalPages > 1 && (
+            <div className="manage-pagination">
+              <button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Anterior</button>
+              <span>Página {page} de {meta.totalPages}</span>
+              <button disabled={page >= meta.totalPages} onClick={() => setPage((value) => value + 1)}>Siguiente</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function EditListingForm({ listing, isAdmin, onCancel, onSaved }: { listing: OwnedListing; isAdmin: boolean; onCancel: () => void; onSaved: (listing: OwnedListing) => void }) {
+  const [form, setForm] = useState({
+    title: listing.title,
+    location: listing.location,
+    price: String(listing.price),
+    description: listing.description,
+    ownerWhatsApp: listing.ownerWhatsApp,
+    badge: listing.badge ?? "",
+  });
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSaving(true);
+    setError("");
+    try {
+      const body: Record<string, unknown> = {
+        title: form.title,
+        location: form.location,
+        price: Number(form.price),
+        description: form.description,
+        ownerWhatsApp: form.ownerWhatsApp,
+      };
+      if (isAdmin) body.badge = form.badge;
+      const response = await fetch(`/api/listings/${listing.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = (await response.json()) as { listing?: OwnedListing; error?: string };
+      if (!response.ok || !payload.listing) throw new Error(payload.error ?? "No se pudo guardar el cambio");
+      onSaved(payload.listing);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "No se pudo guardar el cambio");
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <form className="edit-listing-form" onSubmit={submit}>
+      <h3>Editar “{listing.title}”</h3>
+      <div className="form-grid">
+        <label>Título<input required maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+        <label>Ubicación<input required maxLength={160} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} /></label>
+        <label>Precio en soles<input required min="1" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} /></label>
+        <label>WhatsApp de contacto<input required value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} /></label>
+        {isAdmin && <label>Insignia (visible en la tarjeta)<input maxLength={60} value={form.badge} placeholder="Ej. Verificado" onChange={(event) => setForm({ ...form, badge: event.target.value })} /></label>}
+      </div>
+      <label>Descripción<textarea required rows={3} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="edit-listing-actions">
+        <button type="button" className="text-action" onClick={onCancel}>Cancelar</button>
+        <button className="dark-button" disabled={isSaving}>{isSaving ? "Guardando…" : "Guardar cambios"}</button>
+      </div>
+    </form>
   );
 }

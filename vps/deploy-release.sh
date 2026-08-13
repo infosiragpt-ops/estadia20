@@ -92,6 +92,9 @@ chown -R root:root "$NEXT_DIR"
 find "$NEXT_DIR" -type d -exec chmod 0755 {} +
 find "$NEXT_DIR" -type f -exec chmod 0644 {} +
 
+if [[ ! -d "$APP_DIR" ]]; then
+  install -d -m 0755 "$APP_DIR"
+fi
 mv -- "$APP_DIR" "$PREVIOUS_DIR"
 previous_saved=1
 mv -- "$NEXT_DIR" "$APP_DIR"

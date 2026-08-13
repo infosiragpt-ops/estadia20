@@ -25,6 +25,7 @@ class MarketplaceApiTests(unittest.TestCase):
         roomies_server.DATABASE_PATH = data_directory / "roomies20.sqlite3"
         roomies_server.UPLOADS_DIR = data_directory / "uploads"
         roomies_server.PUBLIC_DIR = Path(cls.temporary_directory.name) / "public"
+        roomies_server.SEED_DEMO_DATA = True
         roomies_server._RATE_LIMIT_BUCKETS.clear()
         roomies_server.initialize_database()
 

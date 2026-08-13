@@ -20,11 +20,14 @@ python3 -m py_compile vps/server.py
 
 La compilación se guarda en `vps/public`.
 
-El cliente OAuth web de Google debe autorizar `https://llaves365.com` y
-`https://www.llaves365.com`. El identificador público se configura mediante
-`GOOGLE_CLIENT_ID`; la cuenta administradora se controla con
-`LLAVES365_OWNER_EMAIL` (con compatibilidad para `ROOMIES20_OWNER_EMAIL`) y por
-defecto es `infosiragpt@gmail.com`.
+El cliente OAuth web de Google debe autorizar `https://estadia20.com` y
+`https://www.estadia20.com` (agrega también `https://llaves365.com` y
+`https://www.llaves365.com` si ese dominio sigue activo). El identificador
+público se configura mediante `GOOGLE_CLIENT_ID`; la cuenta administradora se
+controla con `ESTADIA20_OWNER_EMAIL` (con compatibilidad para
+`LLAVES365_OWNER_EMAIL` y `ROOMIES20_OWNER_EMAIL`) y por defecto es
+`carrerajorge874@gmail.com`. Al arrancar, el servidor sincroniza el rol
+`admin` con ese correo y lo retira de cualquier otra cuenta.
 
 ## Rutas de producción
 
@@ -48,6 +51,22 @@ certbot --nginx --cert-name estadia20.com \
 ```
 
 El endpoint `GET /api/health` confirma que la API y la base de datos están disponibles.
+
+## Panel de administración
+
+Al iniciar sesión con Google con el correo administrador, el menú y "Mi
+cuenta" muestran el "Panel de administración": resumen con métricas
+(anuncios, cuentas, contactos, favoritos), gestión de anuncios (editar,
+insignia, eliminar), consultas registradas y lista de usuarios. Todos los
+usuarios con sesión pueden gestionar sus propios anuncios desde "Mis
+anuncios".
+
+## Datos de demostración
+
+Los anuncios de ejemplo ya no se insertan automáticamente: solo se siembran
+si el servicio arranca con `ESTADIA20_SEED_DEMO=1`. Así, los anuncios de
+demostración eliminados desde el panel no reaparecen al reiniciar. La base de
+producción existente conserva los suyos hasta que el administrador los borre.
 
 ## Despliegue automático desde GitHub
 

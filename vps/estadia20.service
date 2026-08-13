@@ -1,5 +1,5 @@
 [Unit]
-Description=roomies20 application API
+Description=estadia20 application API
 After=network.target
 
 [Service]
@@ -10,6 +10,7 @@ WorkingDirectory=/opt/estadia20
 Environment=PYTHONUNBUFFERED=1
 Environment=ESTADIA20_DATA_DIR=/var/lib/estadia20
 Environment=ESTADIA20_PUBLIC_DIR=/opt/estadia20/public
+Environment=ESTADIA20_OWNER_EMAIL=carrerajorge874@gmail.com
 ExecStart=/usr/bin/python3 /opt/estadia20/server.py --host 127.0.0.1 --port 3011
 Restart=always
 RestartSec=3

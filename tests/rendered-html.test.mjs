@@ -4,7 +4,7 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 
-test("ships the finished roomies20 marketplace", async () => {
+test("ships the finished estadia20 marketplace", async () => {
   const [page, layout, styles, packageJson] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
@@ -12,12 +12,15 @@ test("ships the finished roomies20 marketplace", async () => {
     readFile(new URL("package.json", root), "utf8"),
   ]);
 
-  assert.match(layout, /roomies20 — encuentra tu próximo lugar/);
-  assert.match(page, /Roomes/);
+  assert.match(layout, /Estadia20 — encuentra tu próximo lugar/);
+  assert.match(page, /Roomies/);
   assert.match(page, /Depas/);
-  assert.match(page, /Arbnb/);
+  assert.match(page, /Estadías/);
   assert.match(page, /Transporte/);
   assert.match(page, /Iniciar sesión/);
+  assert.match(page, /AdminPanelModal/);
+  assert.match(page, /api\/admin\/overview/);
+  assert.match(page, /api\/my\/listings/);
   assert.match(page, /Ver planes/);
   assert.match(page, /https:\/\/wa\.me\//);
   assert.match(page, /results-toolbar/);
@@ -68,6 +71,9 @@ test("hardens the VPS marketplace API", async () => {
   assert.match(server, /image_extension_from_content/);
   assert.match(server, /listing_not_found/);
   assert.match(server, /stale-while-revalidate/);
+  assert.match(server, /carrerajorge874@gmail\.com/);
+  assert.match(server, /def require_admin/);
+  assert.match(workflow, /tests\.test_admin_api/);
   assert.match(nginx, /Content-Security-Policy/);
   assert.match(workflow, /tests\.test_marketplace_api/);
 });
