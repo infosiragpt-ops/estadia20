@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -9,6 +9,12 @@ export const metadata: Metadata = {
   title: "Estadia20 — encuentra tu próximo lugar",
   description: "Roomies, departamentos, estadías por noche y transporte con contacto directo y sin comisiones extras.",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
