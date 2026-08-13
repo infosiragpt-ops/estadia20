@@ -730,6 +730,8 @@ export default function Home() {
   const [publishAfterLogin, setPublishAfterLogin] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
+  const [oauthRedirectResult, setOauthRedirectResult] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("auth"));
   const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
   const [galleryIndexes, setGalleryIndexes] = useState<Record<number, number>>({});
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
@@ -875,24 +877,21 @@ export default function Home() {
     };
   }, []);
 
-  // El acceso con Google por redirección vuelve a la portada con ?auth=…:
-  // se limpia la URL y se avisa el resultado (la sesión ya viene en la cookie).
+  // El acceso con Google por redirección vuelve a la portada con ?auth=…: el
+  // parámetro se lee antes de que el efecto de filtros reescriba la URL y la
+  // sesión ya viene en la cookie; aquí solo se avisa el resultado.
   useEffect(() => {
-    const parameters = new URLSearchParams(window.location.search);
-    const authResult = parameters.get("auth");
-    if (!authResult) return;
-    parameters.delete("auth");
-    const query = parameters.toString();
-    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+    if (!oauthRedirectResult) return;
     const timer = window.setTimeout(() => {
-      if (authResult === "google-ok") flashNotice("Sesión iniciada con Google");
-      if (authResult === "google-error") {
+      if (oauthRedirectResult === "google-ok") flashNotice("Sesión iniciada con Google");
+      if (oauthRedirectResult === "google-error") {
         setShowLogin(true);
         flashNotice("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error");
       }
+      setOauthRedirectResult(null);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [oauthRedirectResult]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1678,7 +1677,9 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
         // redirección de "Continuar con Google".
         renderCheckTimeout = window.setTimeout(() => {
           if (cancelled) return;
-          if (!googleButtonRef.current?.querySelector("iframe")) {
+          const officialButton = googleButtonRef.current?.querySelector("iframe");
+          // Un iframe colapsado (sin tamaño) equivale a que no cargó.
+          if (!officialButton || officialButton.clientWidth < 40 || officialButton.clientHeight < 20) {
             setGoogleStatus("unavailable");
             setGoogleMessage(
               "El botón oficial de Google no cargó en este navegador. Toca «Continuar con Google» para entrar desde la página segura de Google, o vuelve a intentarlo.",
