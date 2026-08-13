@@ -224,9 +224,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .favorite-button { position: absolute; top: 9px; right: 9px; width: 38px; height: 38px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #fff; font-size: 29px; line-height: 1; text-shadow: 0 1px 3px rgba(0,0,0,.75); }
 .favorite-button.is-favorite { color: var(--rose); }
 .favorite-button:disabled { opacity: .75; }
-.carousel-arrow { position: absolute; top: 50%; right: 10px; width: 32px; height: 32px; display: grid; place-items: center; padding: 0 0 2px; border: 0; border-radius: 50%; background: rgba(255,255,255,.93); color: var(--ink); font-size: 25px; opacity: 0; transform: translateY(-50%); transition: opacity .18s ease, transform .18s ease; }
+.carousel-arrow { position: absolute; top: 50%; right: 10px; z-index: 2; width: 32px; height: 32px; display: grid; place-items: center; padding: 0 0 2px; border: 0; border-radius: 50%; background: rgba(255,255,255,.93); color: var(--ink); font-size: 25px; opacity: 0; transform: translateY(-50%); transition: opacity .18s ease, transform .18s ease; }
+.carousel-arrow.previous { right: auto; left: 10px; }
 .listing-card:hover .carousel-arrow, .carousel-arrow:focus-visible { opacity: 1; }
 .carousel-arrow:disabled { display: none; }
+/* Galería deslizable estilo iOS Photos: scroll horizontal nativo con
+   scroll-snap. La foto sigue al dedo, encaja en la más cercana al soltar y
+   se detiene en los extremos; el scroll vertical de la página no se toca. */
+.swipe-gallery { display: flex; width: 100%; height: 100%; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; }
+.swipe-gallery::-webkit-scrollbar { display: none; }
+.swipe-gallery.is-dragging { scroll-snap-type: none; cursor: grabbing; }
+.swipe-gallery.is-dragging img { pointer-events: none; }
+.swipe-gallery > img { flex: 0 0 100%; width: 100%; min-width: 100%; height: 100%; object-fit: cover; scroll-snap-align: center; scroll-snap-stop: always; user-select: none; -webkit-user-select: none; }
 .image-dots { position: absolute; left: 0; right: 0; bottom: 11px; display: flex; justify-content: center; gap: 5px; }
 .image-dots button { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.6); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .image-dots button.active { background: #fff; }
@@ -358,6 +367,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .publish-feature-options button.selected { border-color: var(--ink); background: var(--ink); color: #fff; }
 .image-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }.image-upload > span { display: flex; align-items: center; justify-content: center; min-height: 76px; padding: 14px; border: 1px dashed #aaa; border-radius: 10px; background: var(--soft); color: #555; font-size: 11px; font-weight: 600; text-align: center; cursor: pointer; }.image-upload:hover > span { border-color: var(--ink); background: #f2f2f2; }
 .detail-modal { width: min(900px, 100%); display: grid; grid-template-columns: .95fr 1.05fr; gap: 0; padding: 0; overflow: hidden; }.detail-close { position: absolute; top: 13px; right: 13px; z-index: 3; background: rgba(255,255,255,.93); }.detail-image { position: relative; min-height: 480px; }.detail-image > img { width: 100%; height: 100%; position: absolute; inset: 0; object-fit: cover; }.detail-image > span { position: absolute; top: 15px; left: 15px; padding: 7px 10px; border-radius: 16px; background: #fff; font-size: 9px; font-weight: 700; }.detail-gallery-arrow { position: absolute; top: 50%; z-index: 2; width: 38px; height: 38px; display: grid; place-items: center; padding: 0 0 3px; border: 0; border-radius: 50%; background: rgba(255,255,255,.92); color: var(--ink); font-size: 28px; line-height: 1; transform: translateY(-50%); box-shadow: 0 2px 7px rgba(0,0,0,.16); }.detail-gallery-arrow.previous { left: 14px; }.detail-gallery-arrow.next { right: 14px; }.detail-gallery-arrow:hover, .detail-gallery-arrow:focus-visible { background: #fff; transform: translateY(-50%) scale(1.04); }.detail-gallery-arrow:focus-visible { outline: 2px solid var(--rose); outline-offset: 2px; }.detail-image-count { top: auto !important; right: 14px; bottom: 75px; left: auto !important; padding: 5px 8px !important; border-radius: 12px !important; background: rgba(0,0,0,.58) !important; color: #fff; font-size: 10px !important; font-weight: 700 !important; }.detail-thumbnails { position: absolute; right: 14px; bottom: 14px; left: 14px; z-index: 2; display: flex; gap: 6px; overflow-x: auto; padding: 6px; border-radius: 10px; background: rgba(0,0,0,.42); scrollbar-width: thin; }.detail-thumbnails button { width: 56px; height: 42px; flex: 0 0 auto; padding: 0; overflow: hidden; border: 2px solid transparent; border-radius: 6px; background: rgba(255,255,255,.3); }.detail-thumbnails button.active { border-color: #fff; }.detail-thumbnails button:focus-visible { outline: 2px solid var(--rose); outline-offset: 2px; }.detail-thumbnails img { width: 100%; height: 100%; display: block; object-fit: cover; }.detail-body { padding: 38px 31px; }.detail-title { display: flex; justify-content: space-between; gap: 13px; align-items: start; }.detail-title h2 { font-size: 27px; }.detail-title > strong { font-size: 11px; white-space: nowrap; }.detail-location { margin: 8px 0 0; color: var(--muted); font-size: 11px; }.detail-description { margin: 22px 0; color: #5b5b5b; font-size: 12px; line-height: 1.6; }.detail-benefits { display: flex; flex-wrap: wrap; gap: 6px; }.detail-footer { display: flex; align-items: end; justify-content: space-between; gap: 15px; margin-top: 31px; padding-top: 20px; border-top: 1px solid var(--soft-line); }.detail-footer > div { display: grid; gap: 5px; }.detail-footer small { color: var(--muted); font-size: 9px; }.detail-footer strong { font-size: 20px; }.detail-footer em { color: var(--muted); font-size: 9px; font-style: normal; font-weight: 400; }.detail-footer .primary-button { margin: 0; }
+/* La galería del detalle ocupa toda el área de la imagen; las diapositivas
+   se apilan en horizontal y se deslizan con el dedo igual que en la tarjeta. */
+.detail-image .swipe-gallery { position: absolute; inset: 0; z-index: 1; }
+.detail-image .swipe-gallery img { position: static; width: 100%; height: 100%; }
+.detail-gallery-arrow:disabled { opacity: 0; pointer-events: none; }
 .detail-depa-status { display: flex; flex-wrap: wrap; gap: 5px; margin: -9px 0 15px; font-size: 11px; }.detail-depa-status strong { color: var(--green); }.detail-depa-status span { color: var(--muted); }
 .detail-depa-specs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }.detail-depa-specs > span { min-width: 0; display: grid; gap: 4px; padding: 9px 10px; border: 1px solid var(--soft-line); border-radius: 9px; background: #fafafa; }.detail-depa-specs strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.detail-depa-specs small { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .04em; }
 .detail-depa-features { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 14px; }.detail-depa-features span { padding: 6px 8px; border-radius: 8px; background: #f3f3f3; color: #555; font-size: 9px; font-weight: 700; }
@@ -608,11 +622,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 }
 
-/* En pantallas táctiles no existe hover: la flecha del carrusel debe verse
-   siempre para poder pasar fotografías con el dedo, y los puntos del carrusel
-   amplían su zona táctil sin crecer visualmente. */
+/* En pantallas táctiles las fotografías se pasan deslizando con el dedo
+   (galería con scroll-snap), así que las flechas sobran y solo taparían la
+   foto creando zonas muertas para el gesto. Los puntos del carrusel amplían
+   su zona táctil sin crecer visualmente. */
 @media (hover: none) {
-  .carousel-arrow { opacity: 1; }
+  .carousel-arrow, .detail-gallery-arrow { display: none; }
   .image-dots button { position: relative; }
   .image-dots button::after { content: ""; position: absolute; inset: -15px -3px; }
 }
