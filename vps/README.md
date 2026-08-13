@@ -51,13 +51,12 @@ crea la cookie de sesión y vuelve a la portada. Los dominios aceptados para
 el retorno se controlan con `ESTADIA20_OAUTH_HOSTS` (por defecto los cuatro
 dominios anteriores).
 
-Las cuentas administradoras se controlan con `ESTADIA20_OWNER_EMAIL`
-(acepta varios correos separados por comas, con compatibilidad para
-`LLAVES365_OWNER_EMAIL` y `ROOMIES20_OWNER_EMAIL`) y por defecto son
-`carrerajorge874@gmail.com` e `infosiragpt@gmail.com`. Solo se promueven al
-iniciar sesión con Google (correo verificado); esos correos no pueden
-registrarse con contraseña. Al arrancar, el servidor sincroniza el rol
-`admin` con esos correos y lo retira de cualquier otra cuenta.
+La cuenta administradora se controla con `ESTADIA20_OWNER_EMAIL` (con
+compatibilidad para `LLAVES365_OWNER_EMAIL` y `ROOMIES20_OWNER_EMAIL`) y por
+defecto es `carrerajorge874@gmail.com`. Solo se promueve al iniciar sesión
+con Google (correo verificado); ese correo no puede registrarse con
+contraseña. Al arrancar, el servidor sincroniza el rol `admin` con ese correo
+y lo retira de cualquier otra cuenta.
 
 ## Rutas de producción
 

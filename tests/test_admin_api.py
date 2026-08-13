@@ -24,9 +24,7 @@ class AdminApiTests(unittest.TestCase):
         roomies_server.DATABASE_PATH = data_directory / "estadia20.sqlite3"
         roomies_server.UPLOADS_DIR = data_directory / "uploads"
         roomies_server.PUBLIC_DIR = Path(cls.temporary_directory.name) / "public"
-        roomies_server.OWNER_EMAILS = frozenset(
-            {"carrerajorge874@gmail.com", "infosiragpt@gmail.com"}
-        )
+        roomies_server.OWNER_EMAIL = "carrerajorge874@gmail.com"
         roomies_server._RATE_LIMIT_BUCKETS.clear()
         roomies_server.initialize_database()
 
@@ -98,13 +96,12 @@ class AdminApiTests(unittest.TestCase):
         with roomies_server.connect() as database:
             database.execute("UPDATE users SET role = 'admin' WHERE email = ?", (email,))
 
-    def test_owner_roles_are_synced_on_startup(self) -> None:
+    def test_owner_role_is_synced_on_startup(self) -> None:
         with roomies_server.connect() as database:
             database.execute(
                 """
                 INSERT INTO users (name, email, password_hash, auth_provider, role)
                 VALUES ('Dueño', 'carrerajorge874@gmail.com', '', 'google', 'user'),
-                       ('Dueño 2', 'infosiragpt@gmail.com', '', 'google', 'user'),
                        ('Antiguo', 'antiguo-admin@example.com', '', 'password', 'admin')
                 """
             )
@@ -114,22 +111,17 @@ class AdminApiTests(unittest.TestCase):
                 owner_role = database.execute(
                     "SELECT role FROM users WHERE email = 'carrerajorge874@gmail.com'"
                 ).fetchone()["role"]
-                second_owner_role = database.execute(
-                    "SELECT role FROM users WHERE email = 'infosiragpt@gmail.com'"
-                ).fetchone()["role"]
                 old_role = database.execute(
                     "SELECT role FROM users WHERE email = 'antiguo-admin@example.com'"
                 ).fetchone()["role"]
             self.assertEqual(owner_role, "admin")
-            self.assertEqual(second_owner_role, "admin")
             self.assertEqual(old_role, "user")
         finally:
             with roomies_server.connect() as database:
                 database.execute(
                     """
                     DELETE FROM users WHERE email IN
-                      ('carrerajorge874@gmail.com', 'infosiragpt@gmail.com',
-                       'antiguo-admin@example.com')
+                      ('carrerajorge874@gmail.com', 'antiguo-admin@example.com')
                     """
                 )
 
@@ -298,20 +290,18 @@ class AdminApiTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(orphan_favorites, 0)
 
-    def test_owner_emails_cannot_be_registered_with_password(self) -> None:
-        for owner_email in ("carrerajorge874@gmail.com", "infosiragpt@gmail.com"):
-            with self.subTest(owner_email=owner_email):
-                status, payload, _ = self.request(
-                    "POST",
-                    "/api/auth/register",
-                    {
-                        "name": "Impostor",
-                        "email": owner_email,
-                        "password": "clave-impostora-1",
-                    },
-                )
-                self.assertEqual(status, 409)
-                self.assertIn("Google", payload["error"])
+    def test_owner_email_cannot_be_registered_with_password(self) -> None:
+        status, payload, _ = self.request(
+            "POST",
+            "/api/auth/register",
+            {
+                "name": "Impostor",
+                "email": "carrerajorge874@gmail.com",
+                "password": "clave-impostora-1",
+            },
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("Google", payload["error"])
 
     def test_startup_never_promotes_password_accounts(self) -> None:
         with roomies_server.connect() as database:

@@ -2,7 +2,7 @@
 
 Marketplace full stack (estadia20.com) para publicar y encontrar Roomies, departamentos, estadías por noche y servicios de transporte. Incluye contacto directo por WhatsApp, favoritos, consultas, publicación de anuncios, carga de imágenes, gestión de anuncios propios y un panel de administración.
 
-Las cuentas administradoras son `carrerajorge874@gmail.com` e `infosiragpt@gmail.com` (configurables con la variable `ESTADIA20_OWNER_EMAIL` en el VPS, que acepta varios correos separados por comas). Al iniciar sesión con Google con cualquiera de esos correos, la cuenta recibe el rol `admin` y puede abrir el panel de administración desde el menú o desde "Mi cuenta".
+La cuenta administradora es `carrerajorge874@gmail.com` (configurable con la variable `ESTADIA20_OWNER_EMAIL` en el VPS). Al iniciar sesión con Google con ese correo, la cuenta recibe el rol `admin` y puede abrir el panel de administración desde el menú o desde "Mi cuenta".
 
 ## Tecnología
 
