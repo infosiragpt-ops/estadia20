@@ -5,7 +5,9 @@ server {
 
     root /opt/estadia20/public;
     index index.html;
-    client_max_body_size 9m;
+    # Una publicación puede subir hasta 15 fotos de 12 MB en una sola petición
+    # multipart; el servidor las redimensiona antes de guardarlas.
+    client_max_body_size 190m;
 
     location /api/ {
         add_header X-Content-Type-Options "nosniff" always;

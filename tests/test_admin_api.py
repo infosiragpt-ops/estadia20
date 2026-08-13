@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import tempfile
@@ -354,7 +355,12 @@ class AdminApiTests(unittest.TestCase):
 
     def test_upload_accepts_multipart_image_and_serves_it_back(self) -> None:
         cookie = self.register("Fotógrafa", "fotografa@example.com")
-        png_content = b"\x89PNG\r\n\x1a\n" + b"A\r\nB\x00\xffC" * 40
+        # PNG real de 1×1 para que el redimensionado con Pillow (si está
+        # instalada) pueda decodificarlo; sin Pillow se guarda tal cual.
+        png_content = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
+            "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
         boundary = "----estadia20boundary"
         body = (
             f"--{boundary}\r\n"
@@ -385,7 +391,12 @@ class AdminApiTests(unittest.TestCase):
         served_bytes = served.read()
         connection.close()
         self.assertEqual(served.status, 200)
-        self.assertEqual(served_bytes, png_content)
+        self.assertTrue(served_bytes)
+        # Con Pillow instalada la foto se re-guarda como JPEG; sin Pillow se
+        # conserva el PNG original.
+        self.assertTrue(
+            served_bytes.startswith(b"\xff\xd8\xff") or served_bytes == png_content
+        )
 
     def test_my_listings_returns_own_listings_with_counts(self) -> None:
         cookie = self.register("Anunciante", "anunciante@example.com")

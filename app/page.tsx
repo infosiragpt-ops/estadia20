@@ -7,10 +7,12 @@ import type { FormEvent } from "react";
 import {
   demoListings,
   depaFeatureOptions,
+  stayAmenityOptions,
   type Category,
   type DepaDetails,
   type DepaFeature,
   type Listing,
+  type StayAmenity,
 } from "./data";
 
 // Marca pública: el sitio vive en llaves365.com. Los nombres internos
@@ -32,6 +34,41 @@ const categoryDetails: Record<Category, { noun: string; date: string; guests: st
   Airbnb: { noun: "alojamientos", date: "9–14 de ago", guests: "2 huéspedes", priceLabel: "por noche" },
   Transporte: { noun: "servicios", date: "Cuando quieras", guests: "Carga o pasajeros", priceLabel: "por servicio" },
 };
+
+// Cada categoría tiene su propio formulario de publicación, con una guía de
+// descripción distinta para que el anuncio cuente lo que importa.
+const publishCopy: Record<Category, { kicker: string; helper: string; placeholder: string; titlePlaceholder: string }> = {
+  Roomies: {
+    kicker: "Publicar habitación",
+    helper: "Cuéntales a tu futuro roomie cómo es la habitación, la casa y con quién van a vivir.",
+    placeholder: "Ej. Habitación amoblada con escritorio, casa tranquila con dos roomies que trabajan…",
+    titlePlaceholder: "Ej. Habitación con luz y calma",
+  },
+  Depas: {
+    kicker: "Publicar depa",
+    helper: "Describe el departamento: ambientes, piso, zona y condiciones del contrato.",
+    placeholder: "Ej. Depa de 2 dormitorios en piso 5 con balcón, cerca al parque, contrato de 12 meses…",
+    titlePlaceholder: "Ej. Depa luminoso en Barranco",
+  },
+  Airbnb: {
+    kicker: "Publicar estadía",
+    helper: "Describe la estadía: el espacio, qué incluye y cómo es la zona para una noche o unos días.",
+    placeholder: "Ej. Depa completo con wifi rápido y cocina equipada, a dos cuadras del malecón…",
+    titlePlaceholder: "Ej. Suite luminosa cerca al malecón",
+  },
+  Transporte: {
+    kicker: "Publicar transporte",
+    helper: "Describe el servicio: vehículo, equipo, zona y cómo coordinan la mudanza o el traslado.",
+    placeholder: "Ej. Camión cerrado de 3 t con dos ayudantes, cubrimos Lima y Callao, coordinamos por WhatsApp…",
+    titlePlaceholder: "Ej. Mudanza segura para tu depa",
+  },
+};
+
+const MAX_PUBLISH_PHOTOS = 15;
+const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
+const PHOTO_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+type PublishPhoto = { id: number; file: File; preview: string };
 
 const plans = [
   { name: "Roomie", price: "S/ 25", detail: "por habitación al año", icon: "⌂" },
@@ -671,7 +708,22 @@ function inferredRange(meta: string, noun: "dormitorios" | "baños") {
 }
 
 function depaDetails(listing: Listing): DepaDetails {
-  if (listing.details) return listing.details;
+  const details = listing.details;
+  if (details && typeof details.units === "number" && typeof details.bedroomsMin === "number" && typeof details.bedroomsMax === "number" && typeof details.bathroomsMin === "number" && typeof details.bathroomsMax === "number") {
+    return {
+      delivery: details.delivery ?? "Disponible ahora",
+      availability: details.availability ?? "Alquiler mensual",
+      address: details.address ?? listing.location,
+      units: details.units,
+      areaTotal: details.areaTotal ?? "Área por consultar",
+      areaCovered: details.areaCovered ?? "Área techada por consultar",
+      bedroomsMin: details.bedroomsMin,
+      bedroomsMax: details.bedroomsMax,
+      bathroomsMin: details.bathroomsMin,
+      bathroomsMax: details.bathroomsMax,
+      features: details.features ?? [],
+    };
+  }
   const bedrooms = inferredRange(listing.meta, "dormitorios");
   const bathrooms = inferredRange(listing.meta, "baños");
   const searchable = normalizeSearchText(`${listing.meta} ${listing.description}`);
@@ -1963,52 +2015,135 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
   );
 }
 
+async function uploadPublishPhotos(files: File[]): Promise<string[]> {
+  // Una sola petición con todas las fotos: el servidor las redimensiona y
+  // devuelve las URLs en orden.
+  const multiData = new FormData();
+  for (const file of files) multiData.append("files", file);
+  const multiResponse = await fetch("/api/uploads", { method: "POST", body: multiData });
+  const multiPayload = (await multiResponse.json().catch(() => ({}))) as { url?: string; urls?: string[]; error?: string };
+  if (multiResponse.ok) {
+    if (multiPayload.urls?.length) return multiPayload.urls;
+    if (multiPayload.url) return [multiPayload.url];
+  }
+  if (files.length === 1 || [400, 401, 429].includes(multiResponse.status)) {
+    throw new Error(multiPayload.error ?? "No se pudieron subir las fotos");
+  }
+  // Si un proxy limita el tamaño de la petición conjunta, se suben una por una.
+  const urls: string[] = [];
+  for (const file of files) {
+    const data = new FormData();
+    data.append("file", file);
+    const response = await fetch("/api/uploads", { method: "POST", body: data });
+    const payload = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
+    if (!response.ok || !payload.url) throw new Error(payload.error ?? "No se pudo subir una de las fotos");
+    urls.push(payload.url);
+  }
+  return urls;
+}
+
 function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { category: Category; defaultOwnerName: string; onClose: () => void; onCreated: (listing: Listing) => void }) {
+  const [activeCategory, setActiveCategory] = useState<Category>(category);
   const [form, setForm] = useState({ title: "", location: "", price: "", description: "", ownerName: defaultOwnerName, ownerWhatsApp: "" });
+  const [roomieForm, setRoomieForm] = useState({ bathroom: "Compartido", bed: "1 plaza", furnished: "Sí", services: "Sí" });
+  const [stayForm, setStayForm] = useState({ guests: "2", bedrooms: "1", beds: "1", bathrooms: "1" });
+  const [stayAmenities, setStayAmenities] = useState<StayAmenity[]>([]);
   const [transportService, setTransportService] = useState("Mudanza");
+  const [transportForm, setTransportForm] = useState({ vehicle: "", capacity: "", coverage: "" });
   const [depaForm, setDepaForm] = useState({ address: "", units: "1", areaTotal: "", areaCovered: "", bedroomsMin: "1", bedroomsMax: "1", bathroomsMin: "1", bathroomsMax: "1", delivery: "Disponible ahora", availability: "Contrato de 6 a 12 meses" });
   const [depaPublishFeatures, setDepaPublishFeatures] = useState<DepaFeature[]>([]);
-  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [photos, setPhotos] = useState<PublishPhoto[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
+  const photoIdRef = useRef(0);
+  const photosRef = useRef<PublishPhoto[]>([]);
+  const copy = publishCopy[activeCategory];
+
+  useEffect(() => {
+    photosRef.current = photos;
+  }, [photos]);
+
+  useEffect(() => () => {
+    for (const photo of photosRef.current) URL.revokeObjectURL(photo.preview);
+  }, []);
+
+  function addPhotos(files: FileList | null) {
+    if (!files?.length) return;
+    let message = "";
+    const accepted: PublishPhoto[] = [];
+    let total = photos.length;
+    for (const file of Array.from(files)) {
+      if (!PHOTO_MIME_TYPES.includes(file.type)) { message = "Solo se aceptan fotos JPG, PNG o WebP."; continue; }
+      if (file.size > MAX_PHOTO_BYTES) { message = "Cada foto debe pesar menos de 12 MB."; continue; }
+      if (total >= MAX_PUBLISH_PHOTOS) { message = `Puedes subir máximo ${MAX_PUBLISH_PHOTOS} fotos.`; break; }
+      photoIdRef.current += 1;
+      accepted.push({ id: photoIdRef.current, file, preview: URL.createObjectURL(file) });
+      total += 1;
+    }
+    if (accepted.length) setPhotos((current) => [...current, ...accepted]);
+    setError(message);
+  }
+
+  function makeCover(id: number) {
+    setPhotos((current) => {
+      const index = current.findIndex((photo) => photo.id === id);
+      if (index <= 0) return current;
+      return [current[index], ...current.slice(0, index), ...current.slice(index + 1)];
+    });
+  }
+
+  function removePhoto(id: number) {
+    setPhotos((current) => {
+      const removed = current.find((photo) => photo.id === id);
+      if (removed) URL.revokeObjectURL(removed.preview);
+      return current.filter((photo) => photo.id !== id);
+    });
+  }
+
+  function detailsPayload() {
+    if (activeCategory === "Depas") {
+      return {
+        ...depaForm,
+        address: depaForm.address || form.location,
+        units: Number(depaForm.units),
+        bedroomsMin: Number(depaForm.bedroomsMin),
+        bedroomsMax: Number(depaForm.bedroomsMax),
+        bathroomsMin: Number(depaForm.bathroomsMin),
+        bathroomsMax: Number(depaForm.bathroomsMax),
+        features: depaPublishFeatures,
+      };
+    }
+    if (activeCategory === "Roomies") {
+      return { bathroom: roomieForm.bathroom, bed: roomieForm.bed, furnished: roomieForm.furnished === "Sí", servicesIncluded: roomieForm.services === "Sí" };
+    }
+    if (activeCategory === "Airbnb") {
+      return { guests: Number(stayForm.guests), bedrooms: Number(stayForm.bedrooms), beds: Number(stayForm.beds), bathrooms: Number(stayForm.bathrooms), amenities: stayAmenities };
+    }
+    return { ...transportForm };
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (photos.length === 0) {
+      setError("Agrega al menos una foto de tu anuncio.");
+      return;
+    }
     setIsSaving(true);
     setError("");
     try {
-      if (imageFile && imageFile.size > 8 * 1024 * 1024) {
-        throw new Error("La imagen debe pesar menos de 8 MB.");
-      }
-      let image: string | undefined;
-      if (imageFile) {
-        const imageData = new FormData();
-        imageData.append("file", imageFile);
-        const uploadResponse = await fetch("/api/uploads", { method: "POST", body: imageData });
-        const uploadPayload = (await uploadResponse.json()) as { url?: string; error?: string };
-        if (!uploadResponse.ok || !uploadPayload.url) throw new Error(uploadPayload.error ?? "No se pudo subir la fotografía");
-        image = uploadPayload.url;
-      }
+      const gallery = await uploadPublishPhotos(photos.map((photo) => photo.file));
       const response = await fetch("/api/listings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
-          image,
-          category,
+          category: activeCategory,
           price: Number(form.price),
-          priceLabel: categoryDetails[category].priceLabel,
-          service: category === "Transporte" ? transportService : undefined,
-          details: category === "Depas" ? {
-            ...depaForm,
-            address: depaForm.address || form.location,
-            units: Number(depaForm.units),
-            bedroomsMin: Number(depaForm.bedroomsMin),
-            bedroomsMax: Number(depaForm.bedroomsMax),
-            bathroomsMin: Number(depaForm.bathroomsMin),
-            bathroomsMax: Number(depaForm.bathroomsMax),
-            features: depaPublishFeatures,
-          } : undefined,
+          priceLabel: categoryDetails[activeCategory].priceLabel,
+          image: gallery[0],
+          gallery,
+          service: activeCategory === "Transporte" ? transportService : undefined,
+          details: detailsPayload(),
         }),
       });
       const payload = (await response.json()) as { listing?: Listing; error?: string };
@@ -2023,14 +2158,62 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
 
   return (
     <Modal onClose={onClose} className="publish-modal">
-      <div className="modal-header"><div><span className="modal-kicker">Publicar {category.toLowerCase()}</span><h2>Haz que te encuentren</h2></div><button className="close-button" onClick={onClose} aria-label="Cerrar publicación">×</button></div>
+      <div className="modal-header"><div><span className="modal-kicker">{copy.kicker}</span><h2>Haz que te encuentren</h2></div><button className="close-button" onClick={onClose} aria-label="Cerrar publicación">×</button></div>
       <p className="modal-lead">Completa los datos esenciales. Tus clientes podrán contactarte directamente.</p>
+      <div className="publish-category-switch" role="group" aria-label="Tipo de anuncio">
+        {categories.map((option) => (
+          <button key={option.id} type="button" className={activeCategory === option.id ? "active" : ""} aria-pressed={activeCategory === option.id} onClick={() => { setActiveCategory(option.id); setError(""); }}>{option.label}</button>
+        ))}
+      </div>
       <form onSubmit={submit}>
-        <div className="form-grid"><label>Título<input required maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Ej. Depa luminoso en Barranco" /></label><label>Ubicación<input required maxLength={160} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Distrito, ciudad" /></label><label>Precio en soles<input required min="1" max="10000000" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label><label>Tu nombre<input required maxLength={80} value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label>{category === "Transporte" && <label>Tipo de servicio<select value={transportService} onChange={(event) => setTransportService(event.target.value)}><option value="Mudanza">Mudanza</option><option value="Corporativo">Corporativo</option></select></label>}</div>
-        {category === "Depas" && <fieldset className="publish-depa-fields"><legend>Datos del departamento</legend><div className="form-grid"><label>Dirección exacta<input required value={depaForm.address} onChange={(event) => setDepaForm({ ...depaForm, address: event.target.value })} placeholder="Av., calle y número" /></label><label>Número de unidades<input required min="1" type="number" value={depaForm.units} onChange={(event) => setDepaForm({ ...depaForm, units: event.target.value })} /></label><label>Área total<input required value={depaForm.areaTotal} onChange={(event) => setDepaForm({ ...depaForm, areaTotal: event.target.value })} placeholder="Ej. 53 a 60 m² tot." /></label><label>Área techada<input required value={depaForm.areaCovered} onChange={(event) => setDepaForm({ ...depaForm, areaCovered: event.target.value })} placeholder="Ej. 53 a 60 m² techada" /></label><label>Dormitorios mínimos<input required min="1" max="10" type="number" value={depaForm.bedroomsMin} onChange={(event) => setDepaForm({ ...depaForm, bedroomsMin: event.target.value })} /></label><label>Dormitorios máximos<input required min={depaForm.bedroomsMin || "1"} max="10" type="number" value={depaForm.bedroomsMax} onChange={(event) => setDepaForm({ ...depaForm, bedroomsMax: event.target.value })} /></label><label>Baños mínimos<input required min="1" max="10" type="number" value={depaForm.bathroomsMin} onChange={(event) => setDepaForm({ ...depaForm, bathroomsMin: event.target.value })} /></label><label>Baños máximos<input required min={depaForm.bathroomsMin || "1"} max="10" type="number" value={depaForm.bathroomsMax} onChange={(event) => setDepaForm({ ...depaForm, bathroomsMax: event.target.value })} /></label><label>Entrega<input required value={depaForm.delivery} onChange={(event) => setDepaForm({ ...depaForm, delivery: event.target.value })} /></label><label>Disponibilidad o contrato<input required value={depaForm.availability} onChange={(event) => setDepaForm({ ...depaForm, availability: event.target.value })} /></label></div><span className="publish-feature-label">Características</span><div className="publish-feature-options">{depaFeatureOptions.map((feature) => { const selected = depaPublishFeatures.includes(feature); return <button type="button" key={feature} className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => setDepaPublishFeatures((current) => current.includes(feature) ? current.filter((item) => item !== feature) : [...current, feature])}>{selected ? "✓" : "+"} {feature}</button>; })}</div></fieldset>}
-        <label>Descripción<textarea required rows={4} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Cuenta qué hace especial a tu anuncio…" /></label>
-        <label className="image-upload">Fotografía principal<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setImageFile(event.target.files?.[0] ?? null)} /><span>{imageFile ? `✓ ${imageFile.name}` : "Seleccionar imagen · máximo 8 MB"}</span></label>
-        <label>WhatsApp de contacto<input required maxLength={20} inputMode="tel" value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>
+        <div className="form-grid">
+          <label>Título<input required maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder={copy.titlePlaceholder} /></label>
+          <label>Distrito / zona<input required maxLength={160} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Ej. Miraflores, Lima" /></label>
+          <label>Precio en soles · {categoryDetails[activeCategory].priceLabel}<input required min="1" max="10000000" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label>
+          <label>Tu nombre<input required maxLength={80} value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label>
+          <label>WhatsApp de contacto<input required maxLength={20} inputMode="tel" value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>
+        </div>
+        {activeCategory === "Roomies" && <fieldset className="publish-depa-fields"><legend>Datos de la habitación</legend><div className="form-grid">
+          <label>Baño<select value={roomieForm.bathroom} onChange={(event) => setRoomieForm({ ...roomieForm, bathroom: event.target.value })}><option value="Privado">Privado</option><option value="Compartido">Compartido</option></select></label>
+          <label>Cama<select value={roomieForm.bed} onChange={(event) => setRoomieForm({ ...roomieForm, bed: event.target.value })}><option value="1 plaza">1 plaza</option><option value="1.5 plazas">1.5 plazas</option><option value="2 plazas">2 plazas</option></select></label>
+          <label>Amoblado<select value={roomieForm.furnished} onChange={(event) => setRoomieForm({ ...roomieForm, furnished: event.target.value })}><option value="Sí">Sí</option><option value="No">No</option></select></label>
+          <label>Incluye servicios (luz, agua, internet)<select value={roomieForm.services} onChange={(event) => setRoomieForm({ ...roomieForm, services: event.target.value })}><option value="Sí">Sí</option><option value="No">No</option></select></label>
+        </div></fieldset>}
+        {activeCategory === "Depas" && <fieldset className="publish-depa-fields"><legend>Datos del departamento</legend><div className="form-grid"><label>Dirección exacta<input required value={depaForm.address} onChange={(event) => setDepaForm({ ...depaForm, address: event.target.value })} placeholder="Av., calle y número" /></label><label>Número de unidades<input required min="1" type="number" value={depaForm.units} onChange={(event) => setDepaForm({ ...depaForm, units: event.target.value })} /></label><label>Área total<input required value={depaForm.areaTotal} onChange={(event) => setDepaForm({ ...depaForm, areaTotal: event.target.value })} placeholder="Ej. 53 a 60 m² tot." /></label><label>Área techada<input required value={depaForm.areaCovered} onChange={(event) => setDepaForm({ ...depaForm, areaCovered: event.target.value })} placeholder="Ej. 53 a 60 m² techada" /></label><label>Dormitorios mínimos<input required min="1" max="10" type="number" value={depaForm.bedroomsMin} onChange={(event) => setDepaForm({ ...depaForm, bedroomsMin: event.target.value })} /></label><label>Dormitorios máximos<input required min={depaForm.bedroomsMin || "1"} max="10" type="number" value={depaForm.bedroomsMax} onChange={(event) => setDepaForm({ ...depaForm, bedroomsMax: event.target.value })} /></label><label>Baños mínimos<input required min="1" max="10" type="number" value={depaForm.bathroomsMin} onChange={(event) => setDepaForm({ ...depaForm, bathroomsMin: event.target.value })} /></label><label>Baños máximos<input required min={depaForm.bathroomsMin || "1"} max="10" type="number" value={depaForm.bathroomsMax} onChange={(event) => setDepaForm({ ...depaForm, bathroomsMax: event.target.value })} /></label><label>Entrega<input required value={depaForm.delivery} onChange={(event) => setDepaForm({ ...depaForm, delivery: event.target.value })} /></label><label>Disponibilidad o contrato<input required value={depaForm.availability} onChange={(event) => setDepaForm({ ...depaForm, availability: event.target.value })} /></label></div><span className="publish-feature-label">Características</span><div className="publish-feature-options">{depaFeatureOptions.map((feature) => { const selected = depaPublishFeatures.includes(feature); return <button type="button" key={feature} className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => setDepaPublishFeatures((current) => current.includes(feature) ? current.filter((item) => item !== feature) : [...current, feature])}>{selected ? "✓" : "+"} {feature}</button>; })}</div></fieldset>}
+        {activeCategory === "Airbnb" && <fieldset className="publish-depa-fields"><legend>Datos de la estadía</legend><div className="form-grid">
+          <label>Huéspedes<input required min="1" max="16" type="number" value={stayForm.guests} onChange={(event) => setStayForm({ ...stayForm, guests: event.target.value })} /></label>
+          <label>Habitaciones<input required min="1" max="20" type="number" value={stayForm.bedrooms} onChange={(event) => setStayForm({ ...stayForm, bedrooms: event.target.value })} /></label>
+          <label>Camas<input required min="1" max="30" type="number" value={stayForm.beds} onChange={(event) => setStayForm({ ...stayForm, beds: event.target.value })} /></label>
+          <label>Baños<input required min="1" max="20" type="number" value={stayForm.bathrooms} onChange={(event) => setStayForm({ ...stayForm, bathrooms: event.target.value })} /></label>
+        </div><span className="publish-feature-label">Extras</span><div className="publish-feature-options">{stayAmenityOptions.map((amenity) => { const selected = stayAmenities.includes(amenity); return <button type="button" key={amenity} className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => setStayAmenities((current) => current.includes(amenity) ? current.filter((item) => item !== amenity) : [...current, amenity])}>{selected ? "✓" : "+"} {amenity}</button>; })}</div></fieldset>}
+        {activeCategory === "Transporte" && <fieldset className="publish-depa-fields"><legend>Datos del servicio</legend><div className="form-grid">
+          <label>Tipo de servicio<select value={transportService} onChange={(event) => setTransportService(event.target.value)}><option value="Mudanza">Mudanza</option><option value="Corporativo">Corporativo</option></select></label>
+          <label>Vehículo<input required maxLength={80} value={transportForm.vehicle} onChange={(event) => setTransportForm({ ...transportForm, vehicle: event.target.value })} placeholder="Ej. Camión 3 t o SUV" /></label>
+          <label>Capacidad<input required maxLength={80} value={transportForm.capacity} onChange={(event) => setTransportForm({ ...transportForm, capacity: event.target.value })} placeholder="Ej. 12 m³ o 4 pasajeros" /></label>
+          <label>Zona de cobertura<input required maxLength={120} value={transportForm.coverage} onChange={(event) => setTransportForm({ ...transportForm, coverage: event.target.value })} placeholder="Ej. Lima y Callao" /></label>
+        </div></fieldset>}
+        <label>Descripción<small className="field-hint">{copy.helper}</small><textarea required rows={4} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder={copy.placeholder} /></label>
+        <div className="photo-uploader">
+          <div className="photo-uploader-head"><span className="publish-feature-label">Fotos del anuncio</span><span className="photo-counter">{photos.length} / {MAX_PUBLISH_PHOTOS}</span></div>
+          <div className="photo-grid">
+            {photos.map((photo, index) => (
+              <div key={photo.id} className={`photo-thumb ${index === 0 ? "cover" : ""}`}>
+                <button type="button" className="photo-cover-button" onClick={() => makeCover(photo.id)} aria-label={index === 0 ? `Foto ${index + 1}, es la portada` : `Usar la foto ${index + 1} como portada`}>
+                  <img src={photo.preview} alt="" />
+                  {index === 0 && <span className="cover-badge">Portada</span>}
+                </button>
+                <button type="button" className="photo-remove" onClick={() => removePhoto(photo.id)} aria-label={`Quitar la foto ${index + 1}`}>×</button>
+              </div>
+            ))}
+            {photos.length < MAX_PUBLISH_PHOTOS && (
+              <label className="photo-add-tile">
+                <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { addPhotos(event.target.files); event.target.value = ""; }} />
+                <span><b>+</b><small>Agregar fotos</small></span>
+              </label>
+            )}
+          </div>
+          <small className="photo-hint">De 1 a {MAX_PUBLISH_PHOTOS} fotos JPG, PNG o WebP (máximo 12 MB cada una). La primera es la portada: toca otra foto para hacerla portada. Al subirlas se ajustan automáticamente a un tamaño profesional.</small>
+        </div>
         {error && <p className="form-error">{error}</p>}
         <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Guardando…" : "Guardar y publicar"}<Icon>→</Icon></button>
       </form>

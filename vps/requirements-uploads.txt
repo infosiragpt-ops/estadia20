@@ -1,0 +1,4 @@
+# Pillow redimensiona las fotos de los anuncios a un tamaño profesional
+# (máx. 1600×1200, JPEG progresivo o WebP) al subirlas. Si falta en el VPS,
+# el servidor guarda el archivo original como respaldo.
+Pillow==12.3.0

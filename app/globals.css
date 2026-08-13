@@ -366,6 +366,33 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .publish-feature-options button { padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font-size: 10px; font-weight: 700; }
 .publish-feature-options button.selected { border-color: var(--ink); background: var(--ink); color: #fff; }
 .image-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }.image-upload > span { display: flex; align-items: center; justify-content: center; min-height: 76px; padding: 14px; border: 1px dashed #aaa; border-radius: 10px; background: var(--soft); color: #555; font-size: 11px; font-weight: 600; text-align: center; cursor: pointer; }.image-upload:hover > span { border-color: var(--ink); background: #f2f2f2; }
+/* Selector de categoría dentro del modal de publicación: cada categoría
+   muestra su propio formulario al instante. */
+.publish-category-switch { display: flex; gap: 4px; margin-top: 16px; padding: 4px; border-radius: 11px; background: var(--soft); }
+.publish-category-switch button { flex: 1; min-height: 38px; padding: 8px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 700; }
+.publish-category-switch button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
+.field-hint { color: var(--muted); font-size: 10px; font-weight: 400; line-height: 1.4; }
+/* Cuadrícula de hasta 15 fotos: la primera es la portada, un toque en otra
+   foto la convierte en portada y la × la quita. */
+.photo-uploader { margin-top: 17px; }
+.photo-uploader-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.photo-uploader-head .publish-feature-label { margin: 0; }
+.photo-counter { color: var(--muted); font-size: 11px; font-weight: 700; }
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; margin-top: 9px; }
+.photo-thumb { position: relative; overflow: hidden; border-radius: 10px; }
+.photo-cover-button { width: 100%; aspect-ratio: 4 / 3; display: block; overflow: hidden; padding: 0; border: 2px solid var(--line); border-radius: 10px; background: var(--soft); }
+.photo-thumb.cover .photo-cover-button { border-color: var(--ink); }
+.photo-cover-button img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.cover-badge { position: absolute; bottom: 4px; left: 4px; padding: 3px 6px; border-radius: 7px; background: var(--ink); color: #fff; font-size: 8px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; pointer-events: none; }
+.photo-remove { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0 0 2px; border: 0; border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; font-size: 15px; line-height: 1; }
+.photo-remove:hover { background: rgba(0,0,0,.8); }
+.photo-add-tile { position: relative; display: block; cursor: pointer; }
+.photo-add-tile input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.photo-add-tile > span { width: 100%; aspect-ratio: 4 / 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 1px dashed #aaa; border-radius: 10px; background: var(--soft); color: #555; }
+.photo-add-tile > span b { font-size: 18px; line-height: 1; }
+.photo-add-tile > span small { font-size: 9px; font-weight: 700; }
+.photo-add-tile:hover > span { border-color: var(--ink); background: #f2f2f2; }
+.photo-hint { display: block; margin-top: 8px; color: var(--muted); font-size: 10px; font-weight: 400; line-height: 1.45; }
 .detail-modal { width: min(900px, 100%); display: grid; grid-template-columns: .95fr 1.05fr; gap: 0; padding: 0; overflow: hidden; }.detail-close { position: absolute; top: 13px; right: 13px; z-index: 3; background: rgba(255,255,255,.93); }.detail-image { position: relative; min-height: 480px; }.detail-image > img { width: 100%; height: 100%; position: absolute; inset: 0; object-fit: cover; }.detail-image > span { position: absolute; top: 15px; left: 15px; padding: 7px 10px; border-radius: 16px; background: #fff; font-size: 9px; font-weight: 700; }.detail-gallery-arrow { position: absolute; top: 50%; z-index: 2; width: 38px; height: 38px; display: grid; place-items: center; padding: 0 0 3px; border: 0; border-radius: 50%; background: rgba(255,255,255,.92); color: var(--ink); font-size: 28px; line-height: 1; transform: translateY(-50%); box-shadow: 0 2px 7px rgba(0,0,0,.16); }.detail-gallery-arrow.previous { left: 14px; }.detail-gallery-arrow.next { right: 14px; }.detail-gallery-arrow:hover, .detail-gallery-arrow:focus-visible { background: #fff; transform: translateY(-50%) scale(1.04); }.detail-gallery-arrow:focus-visible { outline: 2px solid var(--rose); outline-offset: 2px; }.detail-image-count { top: auto !important; right: 14px; bottom: 75px; left: auto !important; padding: 5px 8px !important; border-radius: 12px !important; background: rgba(0,0,0,.58) !important; color: #fff; font-size: 10px !important; font-weight: 700 !important; }.detail-thumbnails { position: absolute; right: 14px; bottom: 14px; left: 14px; z-index: 2; display: flex; gap: 6px; overflow-x: auto; padding: 6px; border-radius: 10px; background: rgba(0,0,0,.42); scrollbar-width: thin; }.detail-thumbnails button { width: 56px; height: 42px; flex: 0 0 auto; padding: 0; overflow: hidden; border: 2px solid transparent; border-radius: 6px; background: rgba(255,255,255,.3); }.detail-thumbnails button.active { border-color: #fff; }.detail-thumbnails button:focus-visible { outline: 2px solid var(--rose); outline-offset: 2px; }.detail-thumbnails img { width: 100%; height: 100%; display: block; object-fit: cover; }.detail-body { padding: 38px 31px; }.detail-title { display: flex; justify-content: space-between; gap: 13px; align-items: start; }.detail-title h2 { font-size: 27px; }.detail-title > strong { font-size: 11px; white-space: nowrap; }.detail-location { margin: 8px 0 0; color: var(--muted); font-size: 11px; }.detail-description { margin: 22px 0; color: #5b5b5b; font-size: 12px; line-height: 1.6; }.detail-benefits { display: flex; flex-wrap: wrap; gap: 6px; }.detail-footer { display: flex; align-items: end; justify-content: space-between; gap: 15px; margin-top: 31px; padding-top: 20px; border-top: 1px solid var(--soft-line); }.detail-footer > div { display: grid; gap: 5px; }.detail-footer small { color: var(--muted); font-size: 9px; }.detail-footer strong { font-size: 20px; }.detail-footer em { color: var(--muted); font-size: 9px; font-style: normal; font-weight: 400; }.detail-footer .primary-button { margin: 0; }
 /* La galería del detalle ocupa toda el área de la imagen; las diapositivas
    se apilan en horizontal y se deslizan con el dedo igual que en la tarjeta. */
@@ -600,6 +627,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .publish-feature-options button { min-height: 44px; font-size: 11px; }
   .form-grid { grid-template-columns: 1fr; }
   .image-upload > span { min-height: 64px; }
+  .publish-category-switch { flex-wrap: wrap; }
+  .publish-category-switch button { flex: 1 1 45%; min-height: 44px; font-size: 11px; }
+  .photo-grid { grid-template-columns: repeat(3, 1fr); }
+  .photo-remove { width: 28px; height: 28px; }
   .primary-button { min-height: 48px; font-size: 12px; }
 
   /* --- Detalle del anuncio: hoja a pantalla completa con CTA fijo --- */

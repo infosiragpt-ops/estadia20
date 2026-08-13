@@ -11,6 +11,7 @@ from email import policy as email_policy
 from email.parser import BytesParser
 import hashlib
 import hmac
+import io
 import json
 import math
 import mimetypes
@@ -74,8 +75,23 @@ OAUTH_REDIRECT_HOSTS = frozenset(
 )
 OAUTH_DEFAULT_HOST = "llaves365.com"
 PASSWORD_ITERATIONS = 310_000
-MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+# Cada foto original puede pesar hasta 12 MB; el servidor la redimensiona a un
+# tamaño profesional (máx. 1600×1200) antes de guardarla, así el archivo final
+# queda mucho más liviano.
+MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+MAX_GALLERY_PHOTOS = 15
+MAX_UPLOAD_FILES = MAX_GALLERY_PHOTOS
+MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_BYTES * MAX_UPLOAD_FILES + 512 * 1024
+PHOTO_MAX_WIDTH = 1600
+PHOTO_MAX_HEIGHT = 1200
+PHOTO_QUALITY = 82
 CATEGORIES = {"Roomies", "Depas", "Airbnb", "Transporte"}
+CATEGORY_PRICE_LABELS = {
+    "Roomies": "por mes",
+    "Depas": "por mes",
+    "Airbnb": "por noche",
+    "Transporte": "por servicio",
+}
 IMAGE_TYPES = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -90,6 +106,9 @@ DEPA_FEATURES = {
     "Terraza",
     "Ascensor",
 }
+ROOMIE_BATHROOM_OPTIONS = {"Privado", "Compartido"}
+ROOMIE_BED_OPTIONS = {"1 plaza", "1.5 plazas", "2 plazas"}
+STAY_AMENITIES = ("Wifi", "Cocina", "Estacionamiento", "Piscina")
 LISTING_SORTS = {
     "recommended": "(badge IS NOT NULL) DESC, rating DESC, reviews DESC, created_at DESC, id DESC",
     "newest": "created_at DESC, id DESC",
@@ -103,7 +122,9 @@ RATE_LIMIT_RULES = {
     ("POST", "/api/auth/google"): (20, 300),
     ("POST", OAUTH_CALLBACK_PATH): (20, 300),
     ("POST", "/api/listings"): (12, 3600),
-    ("POST", "/api/uploads"): (12, 3600),
+    # Una petición puede traer hasta 15 fotos; con 30 peticiones por hora un
+    # anuncio completo (o varios) se publica sin chocar con el límite.
+    ("POST", "/api/uploads"): (30, 3600),
     ("POST", "/api/favorites"): (60, 60),
     ("DELETE", "/api/favorites"): (60, 60),
     ("POST", "/api/inquiries"): (20, 60),
@@ -804,11 +825,12 @@ def optional_integer(value: str | None, minimum: int, maximum: int) -> int | Non
     return number
 
 
-def extract_multipart_file(
-    content_type: str, body: bytes, field_name: str
-) -> tuple[bytes, str] | None:
-    """Extrae un archivo de un cuerpo multipart/form-data sin el módulo cgi
-    (eliminado en Python 3.13), usando el parser MIME de la stdlib."""
+def extract_multipart_files(
+    content_type: str, body: bytes, field_names: tuple[str, ...] = ("files", "file")
+) -> list[tuple[bytes, str]]:
+    """Extrae los archivos de un cuerpo multipart/form-data sin el módulo cgi
+    (eliminado en Python 3.13), usando el parser MIME de la stdlib. Acepta el
+    campo repetido `files` (varias fotos) y el campo `file` (una sola foto)."""
     header = (
         b"Content-Type: "
         + content_type.encode("latin-1", "ignore")
@@ -817,17 +839,18 @@ def extract_multipart_file(
     try:
         message = BytesParser(policy=email_policy.default).parsebytes(header + body)
     except Exception:
-        return None
+        return []
     if not message.is_multipart():
-        return None
+        return []
+    files: list[tuple[bytes, str]] = []
     for part in message.iter_parts():
-        if part.get_param("name", header="content-disposition") != field_name:
+        if part.get_param("name", header="content-disposition") not in field_names:
             continue
         payload = part.get_payload(decode=True)
         if not isinstance(payload, bytes) or not payload:
-            return None
-        return payload, part.get_content_type()
-    return None
+            continue
+        files.append((payload, part.get_content_type()))
+    return files
 
 
 def image_extension_from_content(content: bytes) -> str | None:
@@ -840,6 +863,52 @@ def image_extension_from_content(content: bytes) -> str | None:
     if content.startswith((b"GIF87a", b"GIF89a")):
         return "gif"
     return None
+
+
+def load_pillow():
+    """Devuelve (Image, ImageOps) de Pillow o None si no está instalada.
+    En producción la librería viaja junto al verificador de Google en
+    `.server_vendor`; si falta, las fotos se guardan tal cual llegaron."""
+    if GOOGLE_VENDOR_DIR.is_dir() and str(GOOGLE_VENDOR_DIR) not in sys.path:
+        sys.path.insert(0, str(GOOGLE_VENDOR_DIR))
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return None
+    return Image, ImageOps
+
+
+def process_upload_image(content: bytes, extension: str) -> tuple[bytes, str]:
+    """Redimensiona la foto a un tamaño profesional: entra en 1600×1200 sin
+    agrandar imágenes pequeñas, se convierte a JPEG progresivo (o WebP si ya
+    era WebP) y se eliminan los metadatos EXIF. Si Pillow no está disponible
+    se conserva el archivo original."""
+    pillow = load_pillow()
+    if pillow is None:
+        return content, extension
+    image_module, image_ops = pillow
+    try:
+        with image_module.open(io.BytesIO(content)) as source:
+            source.load()
+            image = image_ops.exif_transpose(source)
+    except Exception as error:
+        raise ValueError("La imagen está dañada o no se pudo procesar") from error
+    # thumbnail() encaja dentro del máximo manteniendo proporción y nunca
+    # agranda una imagen más pequeña que el límite.
+    image.thumbnail((PHOTO_MAX_WIDTH, PHOTO_MAX_HEIGHT), image_module.Resampling.LANCZOS)
+    output = io.BytesIO()
+    if extension == "webp":
+        image.save(output, format="WEBP", quality=PHOTO_QUALITY, method=4)
+        return output.getvalue(), "webp"
+    if image.mode in {"RGBA", "LA", "P", "PA"}:
+        overlay = image.convert("RGBA")
+        flattened = image_module.new("RGB", overlay.size, (255, 255, 255))
+        flattened.paste(overlay, mask=overlay.getchannel("A"))
+        image = flattened
+    elif image.mode != "RGB":
+        image = image.convert("RGB")
+    image.save(output, format="JPEG", quality=PHOTO_QUALITY, progressive=True, optimize=True)
+    return output.getvalue(), "jpg"
 
 
 def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row], dict[str, object]]:
@@ -977,6 +1046,107 @@ def sanitize_depa_details(value: object, location: str) -> dict[str, object]:
         "bathroomsMax": bathrooms_max,
         "features": [feature for feature in features if feature in DEPA_FEATURES],
     }
+
+
+def sanitize_roomies_details(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    bathroom = str(source.get("bathroom", "")).strip()
+    if bathroom not in ROOMIE_BATHROOM_OPTIONS:
+        bathroom = "Compartido"
+    bed = str(source.get("bed", "")).strip()
+    if bed not in ROOMIE_BED_OPTIONS:
+        bed = "1 plaza"
+    return {
+        "bathroom": bathroom,
+        "bed": bed,
+        "furnished": bool(source.get("furnished")),
+        "servicesIncluded": bool(source.get("servicesIncluded")),
+    }
+
+
+def sanitize_stay_details(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    amenities_value = source.get("amenities")
+    amenities_source = amenities_value if isinstance(amenities_value, list) else []
+    amenities = [amenity for amenity in STAY_AMENITIES if amenity in amenities_source]
+    return {
+        "guests": bounded_integer(source.get("guests"), 1, 16, 2),
+        "bedrooms": bounded_integer(source.get("bedrooms"), 1, 20, 1),
+        "beds": bounded_integer(source.get("beds"), 1, 30, 1),
+        "bathrooms": bounded_integer(source.get("bathrooms"), 1, 20, 1),
+        "amenities": amenities,
+    }
+
+
+def sanitize_transport_details(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+
+    def clean_text(key: str, limit: int) -> str:
+        return str(source.get(key, "")).strip()[:limit]
+
+    return {
+        "vehicle": clean_text("vehicle", 80),
+        "capacity": clean_text("capacity", 80),
+        "coverage": clean_text("coverage", 120),
+    }
+
+
+def count_range_label(minimum: int, maximum: int, singular: str, plural: str) -> str:
+    if minimum == maximum:
+        return f"{minimum} {singular if minimum == 1 else plural}"
+    return f"{minimum} a {maximum} {plural}"
+
+
+def build_listing_meta(category: str, details: dict[str, object], service: str | None) -> str:
+    """Resumen corto que se muestra en la tarjeta, construido con los datos
+    saneados de cada categoría (ej. «1 cama · 1 baño compartido · Amoblado»)."""
+    if category == "Roomies":
+        bed = str(details["bed"])
+        parts = [
+            "1 cama" if bed == "1 plaza" else f"1 cama de {bed}",
+            "1 baño privado" if details["bathroom"] == "Privado" else "1 baño compartido",
+            "Amoblado" if details["furnished"] else "Sin amoblar",
+        ]
+        if details["servicesIncluded"]:
+            parts.append("Incluye servicios")
+        return " · ".join(parts)
+    if category == "Depas":
+        return " · ".join(
+            (
+                count_range_label(
+                    int(details["bedroomsMin"]), int(details["bedroomsMax"]),
+                    "dormitorio", "dormitorios",
+                ),
+                count_range_label(
+                    int(details["bathroomsMin"]), int(details["bathroomsMax"]),
+                    "baño", "baños",
+                ),
+                str(details["areaTotal"]),
+            )
+        )
+    if category == "Airbnb":
+        guests = int(details["guests"])
+        bedrooms = int(details["bedrooms"])
+        amenities = details["amenities"] if isinstance(details["amenities"], list) else []
+        parts = [
+            f"{guests} {'huésped' if guests == 1 else 'huéspedes'}",
+            f"{bedrooms} {'habitación' if bedrooms == 1 else 'habitaciones'}",
+        ]
+        if amenities:
+            parts.append(str(amenities[0]))
+        else:
+            beds = int(details["beds"])
+            parts.append(f"{beds} {'cama' if beds == 1 else 'camas'}")
+        return " · ".join(parts)
+    # Transporte
+    parts = [
+        str(details.get(key, "")).strip()
+        for key in ("vehicle", "capacity", "coverage")
+        if str(details.get(key, "")).strip()
+    ]
+    if not parts:
+        parts = [service or "Servicio de transporte"]
+    return " · ".join(parts[:3])
 
 
 class Roomies20Handler(BaseHTTPRequestHandler):
@@ -2130,9 +2300,6 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         description = str(payload.get("description", "")).strip()
         owner_name = str(payload.get("ownerName", "")).strip()
         owner_whatsapp = re.sub(r"\D", "", str(payload.get("ownerWhatsApp", "")))
-        image = str(payload.get("image", "")).strip() or (
-            "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c"
-        )
         price = parse_price(payload.get("price", 0))
         if (
             category not in CATEGORIES
@@ -2147,12 +2314,35 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         ):
             self.send_json({"error": "Completa todos los campos obligatorios."}, HTTPStatus.BAD_REQUEST)
             return
-        if not (
-            image.startswith("/api/uploads/")
-            or image.startswith("https://images.unsplash.com/")
+        # Galería de 1 a 15 fotos; la primera URL es la portada. Se mantiene la
+        # compatibilidad con el campo `image` cuando no llega una galería.
+        gallery_value = payload.get("gallery")
+        if gallery_value is not None and not isinstance(gallery_value, list):
+            self.send_json({"error": "Las fotos del anuncio no son válidas."}, HTTPStatus.BAD_REQUEST)
+            return
+        gallery = [str(item).strip() for item in (gallery_value or []) if str(item).strip()]
+        if len(gallery) > MAX_GALLERY_PHOTOS:
+            self.send_json(
+                {"error": f"Puedes publicar máximo {MAX_GALLERY_PHOTOS} fotos por anuncio."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if not gallery:
+            fallback_image = str(payload.get("image", "")).strip() or (
+                "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c"
+            )
+            gallery = [fallback_image]
+        if any(
+            len(url) > 500
+            or not (
+                url.startswith("/api/uploads/")
+                or url.startswith("https://images.unsplash.com/")
+            )
+            for url in gallery
         ):
             self.send_json({"error": "La fotografía no es válida."}, HTTPStatus.BAD_REQUEST)
             return
+        image = gallery[0]
         service = None
         if category == "Transporte":
             service = str(payload.get("service", "") or "").strip()
@@ -2162,7 +2352,17 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     HTTPStatus.BAD_REQUEST,
                 )
                 return
-        details = sanitize_depa_details(payload.get("details"), location) if category == "Depas" else {}
+        # Cada categoría guarda sus propios datos saneados en details_json y
+        # arma el resumen (meta) que se ve en la tarjeta.
+        if category == "Depas":
+            details = sanitize_depa_details(payload.get("details"), location)
+        elif category == "Roomies":
+            details = sanitize_roomies_details(payload.get("details"))
+        elif category == "Airbnb":
+            details = sanitize_stay_details(payload.get("details"))
+        else:
+            details = sanitize_transport_details(payload.get("details"))
+        meta = build_listing_meta(category, details, service)
         with connect() as database:
             cursor = database.execute(
                 """
@@ -2178,10 +2378,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     location,
                     description,
                     image,
-                    json.dumps([image]),
+                    json.dumps(gallery, ensure_ascii=False),
                     price,
-                    str(payload.get("priceLabel", "")).strip() or "por servicio",
-                    "Publicación nueva · Contacto directo",
+                    CATEGORY_PRICE_LABELS[category],
+                    meta,
                     owner_name,
                     owner_whatsapp,
                     service,
@@ -2248,45 +2448,72 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         )
 
     def create_upload(self) -> None:
+        """Recibe de 1 a 15 fotos en una sola petición multipart (campo `files`
+        repetido o el campo `file` de una sola foto) y las redimensiona a un
+        tamaño profesional antes de guardarlas."""
         if self.require_user() is None:
             return
         length = int(self.headers.get("Content-Length", "0"))
-        if length <= 0 or length > MAX_UPLOAD_BYTES + 128 * 1024:
-            self.send_json({"error": "La imagen debe pesar menos de 8 MB."}, HTTPStatus.BAD_REQUEST)
+        if length <= 0 or length > MAX_UPLOAD_REQUEST_BYTES:
+            self.send_json(
+                {"error": "Las fotos superan el tamaño permitido (máximo 12 MB por foto)."},
+                HTTPStatus.BAD_REQUEST,
+            )
             return
         content_type = self.headers.get("Content-Type", "")
         if not content_type.lower().startswith("multipart/form-data"):
-            self.send_json({"error": "Selecciona una fotografía."}, HTTPStatus.BAD_REQUEST)
+            self.send_json({"error": "Selecciona al menos una fotografía."}, HTTPStatus.BAD_REQUEST)
             return
         body = self.rfile.read(length)
-        upload = extract_multipart_file(content_type, body, "file")
-        if upload is None:
-            self.send_json({"error": "Selecciona una fotografía."}, HTTPStatus.BAD_REQUEST)
+        uploads = extract_multipart_files(content_type, body)
+        if not uploads:
+            self.send_json({"error": "Selecciona al menos una fotografía."}, HTTPStatus.BAD_REQUEST)
             return
-        content, mime_type = upload
-        claimed_extension = IMAGE_TYPES.get(mime_type)
-        if not claimed_extension:
-            self.send_json({"error": "El archivo debe ser una imagen."}, HTTPStatus.BAD_REQUEST)
-            return
-        if len(content) > MAX_UPLOAD_BYTES:
-            self.send_json({"error": "La imagen debe pesar menos de 8 MB."}, HTTPStatus.BAD_REQUEST)
-            return
-        extension = image_extension_from_content(content)
-        if extension is None or extension != claimed_extension:
-            self.send_api_error(
-                "El contenido del archivo no coincide con una imagen válida.",
+        if len(uploads) > MAX_UPLOAD_FILES:
+            self.send_json(
+                {"error": f"Puedes subir máximo {MAX_UPLOAD_FILES} fotos por anuncio."},
                 HTTPStatus.BAD_REQUEST,
-                "invalid_image",
             )
             return
+        # Se validan y procesan todas las fotos antes de escribir nada en
+        # disco, para no dejar archivos huérfanos si una foto es inválida.
+        processed_files: list[tuple[bytes, str]] = []
+        for content, mime_type in uploads:
+            claimed_extension = IMAGE_TYPES.get(mime_type)
+            if not claimed_extension:
+                self.send_json({"error": "Cada archivo debe ser una imagen."}, HTTPStatus.BAD_REQUEST)
+                return
+            if len(content) > MAX_UPLOAD_BYTES:
+                self.send_json(
+                    {"error": "Cada foto debe pesar menos de 12 MB."}, HTTPStatus.BAD_REQUEST
+                )
+                return
+            extension = image_extension_from_content(content)
+            if extension is None or extension != claimed_extension:
+                self.send_api_error(
+                    "El contenido del archivo no coincide con una imagen válida.",
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_image",
+                )
+                return
+            try:
+                processed_files.append(process_upload_image(content, extension))
+            except ValueError:
+                self.send_api_error(
+                    "Una de las fotos está dañada o no se pudo procesar.",
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_image",
+                )
+                return
         folder = date.today().isoformat()
         destination = UPLOADS_DIR / folder
         destination.mkdir(parents=True, exist_ok=True)
-        filename = f"{uuid.uuid4()}.{extension}"
-        (destination / filename).write_bytes(content)
-        self.send_json(
-            {"url": f"/api/uploads/{folder}/{filename}"}, HTTPStatus.CREATED
-        )
+        urls: list[str] = []
+        for content, extension in processed_files:
+            filename = f"{uuid.uuid4()}.{extension}"
+            (destination / filename).write_bytes(content)
+            urls.append(f"/api/uploads/{folder}/{filename}")
+        self.send_json({"url": urls[0], "urls": urls}, HTTPStatus.CREATED)
 
     def serve_upload(self, request_path: str) -> None:
         relative = unquote(request_path.removeprefix("/api/uploads/")).strip("/")
