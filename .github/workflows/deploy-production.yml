@@ -54,7 +54,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile vps/server.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
             tests.test_google_auth \
-            tests.test_marketplace_api
+            tests.test_marketplace_api \
+            tests.test_admin_api
 
       - name: Package release
         run: |

@@ -88,6 +88,32 @@ class GoogleAuthenticationTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(account_count, 1)
 
+    def test_google_login_records_last_login_and_activity(self) -> None:
+        roomies_server.verify_google_credential = lambda credential: {
+            "sub": "google-activity-9",
+            "email": "actividad@example.com",
+            "email_verified": True,
+            "name": "Cuenta Actividad",
+            "picture": "",
+        }
+        status, _, _ = self.request(
+            "POST", "/api/auth/google", {"credential": "signed-google-token"}
+        )
+        self.assertEqual(status, 200)
+        with roomies_server.connect() as database:
+            user = database.execute(
+                """
+                SELECT id, last_login_at, last_login_provider
+                FROM users WHERE email = 'actividad@example.com'
+                """
+            ).fetchone()
+            self.assertIsNotNone(user["last_login_at"])
+            self.assertEqual(user["last_login_provider"], "google")
+            events = database.execute(
+                "SELECT provider FROM login_events WHERE user_id = ?", (user["id"],)
+            ).fetchall()
+        self.assertEqual([event["provider"] for event in events], ["google"])
+
     def test_google_config_is_public_and_invalid_token_is_rejected(self) -> None:
         status, payload, _ = self.request("GET", "/api/auth/config")
         self.assertEqual(status, 200)

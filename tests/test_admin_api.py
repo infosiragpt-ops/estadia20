@@ -165,11 +165,60 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         emails = [user["email"] for user in payload["users"]]
         self.assertIn("admin-panel@example.com", emails)
+        admin_row = next(
+            user for user in payload["users"] if user["email"] == "admin-panel@example.com"
+        )
+        self.assertIsNotNone(admin_row["lastLoginAt"])
+        self.assertEqual(admin_row["lastLoginProvider"], "password")
+        self.assertGreaterEqual(admin_row["listingsByCategory"].get("Roomies", 0), 1)
 
         status, payload, _ = self.request("GET", "/api/admin/inquiries", cookie=admin_cookie)
         self.assertEqual(status, 200)
         self.assertTrue(payload["recent"])
         self.assertTrue(payload["byListing"])
+
+    def test_admin_activity_feed_shows_logins_and_new_listings(self) -> None:
+        status, payload, _ = self.request("GET", "/api/admin/activity")
+        self.assertEqual(status, 401)
+
+        visitor_cookie = self.register("Visitante", "visitante-actividad@example.com")
+        status, payload, _ = self.request(
+            "GET", "/api/admin/activity", cookie=visitor_cookie
+        )
+        self.assertEqual(status, 403)
+
+        publisher_cookie = self.register("Publicadora", "publicadora-actividad@example.com")
+        listing_id = self.create_listing(publisher_cookie, "Cuarto para actividad")
+
+        admin_cookie = self.register("Admin Actividad", "admin-actividad@example.com")
+        self.promote_to_admin("admin-actividad@example.com")
+
+        status, payload, _ = self.request("GET", "/api/admin/activity", cookie=admin_cookie)
+        self.assertEqual(status, 200)
+        events = payload["events"]
+        self.assertTrue(events)
+
+        logins = [event for event in events if event["type"] == "login"]
+        login_emails = [event["email"] for event in logins]
+        self.assertIn("publicadora-actividad@example.com", login_emails)
+        publisher_login = next(
+            event for event in logins
+            if event["email"] == "publicadora-actividad@example.com"
+        )
+        self.assertEqual(publisher_login["provider"], "password")
+        self.assertEqual(publisher_login["name"], "Publicadora")
+        self.assertIn("createdAt", publisher_login)
+
+        listings = [event for event in events if event["type"] == "listing"]
+        published = next(
+            event for event in listings if event["listingId"] == listing_id
+        )
+        self.assertEqual(published["email"], "publicadora-actividad@example.com")
+        self.assertEqual(published["category"], "Roomies")
+        self.assertEqual(published["title"], "Cuarto para actividad")
+
+        timestamps = [str(event["createdAt"]) for event in events]
+        self.assertEqual(timestamps, sorted(timestamps, reverse=True))
 
     def test_owner_can_edit_and_delete_only_their_listing(self) -> None:
         owner_cookie = self.register("Dueña", "duena@example.com")
