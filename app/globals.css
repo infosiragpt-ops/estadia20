@@ -54,8 +54,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .service-tab strong { font-size: clamp(20px, 2vw, 39px); line-height: 1; letter-spacing: -.04em; }
 .service-tab small { display: none; }
 .header-actions { justify-self: end; display: flex; align-items: center; gap: 8px; }
-.host-link { padding: 11px 7px; border: 0; border-radius: 14px; background: transparent; color: #050505; font-size: clamp(17px, 1.45vw, 30px); font-weight: 800; white-space: nowrap; }
-.host-link:hover, .globe-button:hover, .menu-trigger:hover { background: rgba(255,255,255,.22); }
+/* CTA de anfitrión: píldora rosa con relieve suave que resalta sobre el
+   amarillo (#ffbd00) de la cabecera sin verse estridente. */
+.host-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 11px 20px; border: 0; border-radius: 999px; background: linear-gradient(135deg, var(--rose-dark), var(--rose)); color: #fff; font-size: clamp(14px, 1vw, 20px); font-weight: 800; letter-spacing: -.01em; white-space: nowrap; box-shadow: 0 8px 18px rgba(150,5,60,.28), 0 2px 4px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.26); transition: transform .16s ease, box-shadow .16s ease, filter .16s ease; }
+.host-link:hover { filter: brightness(1.06); transform: translateY(-1px); box-shadow: 0 11px 24px rgba(150,5,60,.32), 0 3px 6px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.3); }
+.host-link:active { filter: brightness(.97); transform: translateY(0) scale(.97); box-shadow: 0 4px 10px rgba(150,5,60,.26), inset 0 1px 0 rgba(255,255,255,.2); }
+.host-link:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+.globe-button:hover, .menu-trigger:hover { background: rgba(255,255,255,.22); }
 .globe-button { width: clamp(38px, 3vw, 54px); height: clamp(38px, 3vw, 54px); display: grid; place-items: center; padding: 8px; border: 0; border-radius: 50%; background: transparent; color: #050505; }
 .globe-button svg { width: 100%; height: 100%; }
 .menu-trigger { width: clamp(48px, 3.7vw, 67px); height: clamp(42px, 3.3vw, 59px); display: grid; place-items: center; padding: 9px; border: 0; border-radius: 13px; background: transparent; }
@@ -301,7 +306,30 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .footer-top > div { display: grid; justify-items: start; gap: 10px; }
 .footer-top strong { font-size: 12px; }.footer-top button { padding: 0; border: 0; background: transparent; color: #555; font-size: 11px; }
 .footer-top button:hover { text-decoration: underline; }
+/* La columna «Publica» es una tarjeta sombreada con lavado rosa: el camino
+   para anunciar se distingue del resto del pie sin gritar. */
+.footer-publish-card { align-content: start; gap: 12px; padding: 18px; border: 1px solid #f3d6de; border-radius: 18px; background: linear-gradient(160deg, #ffffff 25%, #fff2f5); box-shadow: 0 12px 30px rgba(148,26,58,.1), 0 2px 6px rgba(0,0,0,.05); }
+.footer-top .footer-publish-card > strong { color: var(--rose-dark); font-size: 10px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.footer-top .footer-publish-primary { min-height: 44px; display: inline-flex; align-items: center; padding: 10px 16px; border-radius: 12px; background: linear-gradient(135deg, var(--rose-dark), var(--rose)); color: #fff; font-size: 12px; font-weight: 800; box-shadow: 0 6px 14px rgba(150,5,60,.22), inset 0 1px 0 rgba(255,255,255,.24); transition: transform .16s ease, box-shadow .16s ease, filter .16s ease; }
+.footer-top .footer-publish-primary:hover { filter: brightness(1.06); transform: translateY(-1px); text-decoration: none; }
+.footer-top .footer-publish-primary:active { filter: brightness(.97); transform: scale(.98); }
+.footer-top .footer-publish-secondary { min-height: 44px; display: inline-flex; align-items: center; padding: 10px 16px; border: 1px solid #efc7d2; border-radius: 12px; background: #fff; color: var(--rose-dark); font-size: 12px; font-weight: 700; transition: border-color .16s ease, background .16s ease; }
+.footer-top .footer-publish-secondary:hover { border-color: var(--rose-dark); background: #fff6f8; text-decoration: none; }
 .footer-bottom { max-width: 1180px; display: flex; justify-content: space-between; gap: 15px; margin: 0 auto; padding-top: 18px; border-top: 1px solid var(--line); color: #666; font-size: 10px; }
+
+/* Aviso de bienvenida para visitantes sin sesión: banner delgado bajo la
+   cabecera que invita a entrar con Google. No bloquea nada y se puede cerrar;
+   el toast del sistema se encarga del segundo (y último) recordatorio. */
+.google-nudge-banner { position: relative; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; width: min(760px, calc(100% - 28px)); margin: 16px auto -8px; padding: 10px 12px 10px 14px; border: 1px solid #f1d7de; border-radius: 16px; background: linear-gradient(150deg, #ffffff, #fff6f8); box-shadow: 0 10px 26px rgba(30,10,20,.1); animation: nudge-in .3s cubic-bezier(.2,.8,.2,1); }
+.google-nudge-icon { width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: #fff; box-shadow: inset 0 0 0 1px var(--soft-line); }
+.google-nudge-icon svg { width: 17px; height: 17px; }
+.google-nudge-banner p { flex: 1 1 210px; min-width: 0; margin: 0; color: var(--ink); font-size: 12px; font-weight: 600; line-height: 1.45; }
+.google-nudge-action { min-height: 38px; flex: 0 0 auto; padding: 9px 15px; border: 0; border-radius: 999px; background: linear-gradient(135deg, var(--rose-dark), var(--rose)); color: #fff; font-size: 11px; font-weight: 800; box-shadow: 0 5px 12px rgba(150,5,60,.2), inset 0 1px 0 rgba(255,255,255,.24); transition: transform .16s ease, filter .16s ease; }
+.google-nudge-action:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.google-nudge-action:active { transform: scale(.97); }
+.google-nudge-close { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; margin-left: -4px; padding: 0 0 2px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 19px; line-height: 1; }
+.google-nudge-close:hover { background: var(--soft); color: var(--ink); }
+@keyframes nudge-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
 /* Modals */
 .modal-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.48); backdrop-filter: blur(3px); animation: fade-in .16s ease; }
@@ -386,6 +414,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .cover-badge { position: absolute; bottom: 4px; left: 4px; padding: 3px 6px; border-radius: 7px; background: var(--ink); color: #fff; font-size: 8px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; pointer-events: none; }
 .photo-remove { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0 0 2px; border: 0; border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; font-size: 15px; line-height: 1; }
 .photo-remove:hover { background: rgba(0,0,0,.8); }
+/* Foto inválida: la casilla se queda con el motivo en español encima (no se
+   descarta en silencio) y solo deja quitarla con la ×. */
+.photo-thumb.has-error .photo-cover-button { border-color: #e0a3b1; background: #fff1f3; }
+.photo-error { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; padding: 7px; border-radius: 8px; background: rgba(255,241,243,.93); color: #8b1430; font-size: 9px; font-weight: 700; line-height: 1.35; text-align: center; }
+.photo-thumb .photo-remove { z-index: 2; }
 .photo-add-tile { position: relative; display: block; cursor: pointer; }
 .photo-add-tile input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 .photo-add-tile > span { width: 100%; aspect-ratio: 4 / 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 1px dashed #aaa; border-radius: 10px; background: var(--soft); color: #555; }
@@ -476,7 +509,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .services-top { min-height: 0; grid-template-rows: 44px auto; gap: 6px 8px; }
   .brand { gap: 6px; font-size: 19px; }
   .brand-symbol { width: 32px; height: 32px; }
-  .host-link { min-height: 44px; padding: 8px 6px; font-size: 14px; }
+  /* En el teléfono es la acción principal junto a la hamburguesa: se mantiene
+     como píldora rosa bien visible con zona táctil de 44px. */
+  .host-link { min-height: 44px; padding: 8px 14px; font-size: 13px; }
   .globe-button { display: none; }
   .menu-trigger { width: 44px; height: 44px; padding: 8px; }
   .hamburger { gap: 5px; }
@@ -609,8 +644,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .footer { padding: 42px max(22px, env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left)); }
   .footer-top { grid-template-columns: 1fr; gap: 28px; }
   .footer-top button { min-height: 44px; padding: 10px 0; font-size: 14px; }
+  /* La tarjeta de publicar sigue siendo cómoda de tocar en el teléfono. */
+  .footer-publish-card { justify-items: stretch; padding: 16px; }
+  .footer-top .footer-publish-primary, .footer-top .footer-publish-secondary { width: 100%; justify-content: center; min-height: 48px; padding: 10px 16px; font-size: 14px; }
   .footer-bottom { align-items: start; flex-direction: column; }
   .toast { bottom: calc(18px + env(safe-area-inset-bottom)); }
+
+  /* --- Banner de bienvenida con Google --- */
+  .google-nudge-banner { width: calc(100% - 24px); margin: 12px auto -4px; padding: 10px; }
+  .google-nudge-banner p { font-size: 13px; }
+  .google-nudge-action { min-height: 44px; font-size: 12px; }
+  .google-nudge-close { width: 44px; height: 44px; margin-left: 0; }
 
   /* --- Modales: hojas casi a pantalla completa que se deslizan desde
          abajo; el contenido hace scroll dentro del modal. --- */
@@ -631,6 +675,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .publish-category-switch button { flex: 1 1 45%; min-height: 44px; font-size: 11px; }
   .photo-grid { grid-template-columns: repeat(3, 1fr); }
   .photo-remove { width: 28px; height: 28px; }
+  .photo-error { font-size: 10px; }
   .primary-button { min-height: 48px; font-size: 12px; }
 
   /* --- Detalle del anuncio: hoja a pantalla completa con CTA fijo --- */
@@ -666,7 +711,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 360px) {
   .brand { font-size: 17px; }
   .brand-symbol { width: 28px; height: 28px; }
-  .host-link { padding: 8px 3px; font-size: 13px; }
+  .host-link { padding: 8px 10px; font-size: 12px; }
   .service-nav { gap: 4px; }
   .service-tab strong { font-size: 11px; }
   .compact-search { grid-template-columns: minmax(0, 1.5fr) minmax(88px, .7fr) 46px; }
