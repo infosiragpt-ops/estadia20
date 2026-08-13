@@ -25,6 +25,35 @@ export type DepaDetails = {
   features: DepaFeature[];
 };
 
+export type RoomieDetails = {
+  bathroom: "Privado" | "Compartido";
+  bed: string;
+  furnished: boolean;
+  servicesIncluded: boolean;
+};
+
+export const stayAmenityOptions = ["Wifi", "Cocina", "Estacionamiento", "Piscina"] as const;
+
+export type StayAmenity = typeof stayAmenityOptions[number];
+
+export type StayDetails = {
+  guests: number;
+  bedrooms: number;
+  beds: number;
+  bathrooms: number;
+  amenities: StayAmenity[];
+};
+
+export type TransportDetails = {
+  vehicle: string;
+  capacity: string;
+  coverage: string;
+};
+
+// Cada categoría guarda su propio bloque en details_json; un anuncio solo
+// tiene los campos de su categoría.
+export type ListingDetails = Partial<DepaDetails & RoomieDetails & StayDetails & TransportDetails>;
+
 export type Listing = {
   id: number;
   category: Category;
@@ -42,7 +71,7 @@ export type Listing = {
   ownerName: string;
   ownerWhatsApp: string;
   service?: string;
-  details?: DepaDetails;
+  details?: ListingDetails;
 };
 
 const image = (id: string) => `https://images.unsplash.com/${id}`;
