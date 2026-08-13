@@ -134,6 +134,46 @@ class MarketplaceApiTests(unittest.TestCase):
         self.assertEqual(inquiry_status, 404)
         self.assertEqual(inquiry_payload["code"], "listing_not_found")
 
+    def test_favorites_listings_returns_saved_listing_dicts(self) -> None:
+        listing_id = self.first_listing_id("Depas")
+        saved_status, saved_payload, saved_headers = self.request(
+            "POST", "/api/favorites", {"listingId": listing_id}
+        )
+        self.assertEqual(saved_status, 200)
+        self.assertTrue(saved_payload["saved"])
+        visitor_cookie = saved_headers["Set-Cookie"].split(";", 1)[0]
+
+        status, payload, _ = self.request(
+            "GET", "/api/favorites/listings", headers={"Cookie": visitor_cookie}
+        )
+        self.assertEqual(status, 200)
+        listing_ids = [listing["id"] for listing in payload["listings"]]
+        self.assertIn(listing_id, listing_ids)
+        saved_listing = next(
+            listing for listing in payload["listings"] if listing["id"] == listing_id
+        )
+        for field in ("title", "location", "price", "priceLabel", "image", "ownerWhatsApp"):
+            self.assertIn(field, saved_listing)
+
+        removed_status, _, _ = self.request(
+            "DELETE",
+            "/api/favorites",
+            {"listingId": listing_id},
+            headers={"Cookie": visitor_cookie},
+        )
+        self.assertEqual(removed_status, 200)
+        empty_status, empty_payload, _ = self.request(
+            "GET", "/api/favorites/listings", headers={"Cookie": visitor_cookie}
+        )
+        self.assertEqual(empty_status, 200)
+        self.assertEqual(empty_payload["listings"], [])
+
+        anonymous_status, anonymous_payload, _ = self.request(
+            "GET", "/api/favorites/listings"
+        )
+        self.assertEqual(anonymous_status, 200)
+        self.assertEqual(anonymous_payload["listings"], [])
+
     def test_rate_limits_return_retry_after_and_request_id(self) -> None:
         listing_id = self.first_listing_id("Transporte")
         rule_key = ("POST", "/api/inquiries")

@@ -30,8 +30,20 @@ test("ships the finished estadia20 marketplace", async () => {
   assert.match(page, /aria-live="polite"/);
   assert.match(page, /SwipeGallery/);
   assert.match(page, /detail-swipe-gallery/);
-  // CTA de publicación en cabecera y pie, y avisos de Google para visitantes.
-  assert.match(page, /className="host-link" onClick={requestPublish}>Publicar un anuncio</);
+  // La cabecera es para el acceso: «Iniciar sesión» con la G de Google para
+  // visitantes y la cuenta activa con sesión. Publicar vive en el menú
+  // (hamburguesa) y en el pie.
+  assert.match(page, /className="host-link login-link" onClick={openLogin}/);
+  assert.match(page, /login-google-badge/);
+  assert.match(page, /className="host-link account-link" onClick={openLogin}/);
+  assert.doesNotMatch(page, /className="host-link" onClick={requestPublish}/);
+  assert.match(page, /onClick={requestPublish}>Publicar un anuncio</);
+  // «Mis favoritos» abre una lista real con los anuncios guardados.
+  assert.match(page, /favorites-modal/);
+  assert.match(page, /api\/favorites\/listings/);
+  assert.match(page, /Todavía no guardaste favoritos\. Toca el corazón en un anuncio para guardarlo\./);
+  assert.match(page, /Entra con Google para no perderlos en otro teléfono\./);
+  assert.doesNotMatch(page, /favoritos guardados`\)/);
   assert.match(page, /footer-publish-card/);
   assert.match(page, /footer-publish-primary/);
   assert.match(page, /llaves365-google-nudge/);
@@ -42,6 +54,9 @@ test("ships the finished estadia20 marketplace", async () => {
   assert.match(page, /Preparando fotos…/);
   assert.match(page, /photo-error/);
   assert.match(styles, /\.host-link/);
+  assert.match(styles, /\.login-google-badge/);
+  assert.match(styles, /\.favorite-row/);
+  assert.match(styles, /\.favorites-empty/);
   assert.match(styles, /\.footer-publish-card/);
   assert.match(styles, /\.google-nudge-banner/);
   assert.match(styles, /\.photo-error/);
@@ -88,6 +103,7 @@ test("hardens the VPS marketplace API", async () => {
   assert.match(server, /RATE_LIMIT_RULES/);
   assert.match(server, /image_extension_from_content/);
   assert.match(server, /listing_not_found/);
+  assert.match(server, /\/api\/favorites\/listings/);
   assert.match(server, /stale-while-revalidate/);
   assert.match(server, /carrerajorge874@gmail\.com/);
   assert.match(server, /def require_admin/);
