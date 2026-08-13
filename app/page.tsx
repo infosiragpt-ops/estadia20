@@ -64,11 +64,48 @@ const publishCopy: Record<Category, { kicker: string; helper: string; placeholde
   },
 };
 
+// Avisos amables de Google para visitantes sin sesión: máximo dos por visita
+// (banner de bienvenida + un recordatorio corto). El cierre queda guardado en
+// localStorage para no insistir en cada recarga.
+const GOOGLE_NUDGE_STORAGE_KEY = "llaves365-google-nudge";
+const GOOGLE_NUDGE_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const MAX_AUTO_GOOGLE_NUDGES = 2;
+
+type GoogleNudgeMemory = { welcomeDismissedAt?: number; reminderShownAt?: number };
+
+function readGoogleNudgeMemory(): GoogleNudgeMemory {
+  try {
+    if (typeof window === "undefined") return {};
+    const raw = window.localStorage.getItem(GOOGLE_NUDGE_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as GoogleNudgeMemory) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function welcomeNudgeRecentlyDismissed() {
+  const memory = readGoogleNudgeMemory();
+  return typeof memory.welcomeDismissedAt === "number"
+    && Date.now() - memory.welcomeDismissedAt < GOOGLE_NUDGE_COOLDOWN_MS;
+}
+
+function saveGoogleNudgeMemory(patch: GoogleNudgeMemory) {
+  try {
+    window.localStorage.setItem(GOOGLE_NUDGE_STORAGE_KEY, JSON.stringify({ ...readGoogleNudgeMemory(), ...patch }));
+  } catch {
+    // Sin localStorage (modo privado estricto) el aviso simplemente no persiste.
+  }
+}
+
 const MAX_PUBLISH_PHOTOS = 15;
 const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
 const PHOTO_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
-type PublishPhoto = { id: number; file: File; preview: string };
+// Las fotos se previsualizan en local (object URL) apenas se eligen y solo se
+// suben al servidor cuando el anuncio se guarda. Una foto inválida conserva su
+// casilla con el motivo en español en vez de desaparecer en silencio.
+type PublishPhoto = { id: number; file: File; preview: string; error?: string };
 
 const plans = [
   { name: "Roomie", price: "S/ 25", detail: "por habitación al año", icon: "⌂" },
@@ -904,6 +941,11 @@ export default function Home() {
   const [favoriteMutations, setFavoriteMutations] = useState<number[]>([]);
   const [notice, setNotice] = useState("");
   const [noticeTone, setNoticeTone] = useState<"success" | "error">("success");
+  const [showGoogleNudge, setShowGoogleNudge] = useState(false);
+  // Si el visitante ya cerró el banner hace poco (localStorage) no se vuelve
+  // a mostrar; en ese caso solo queda armado el recordatorio corto.
+  const [welcomeNudgeDismissed, setWelcomeNudgeDismissed] = useState(welcomeNudgeRecentlyDismissed);
+  const autoNudgesShownRef = useRef(0);
   const listingsCacheRef = useRef(new Map<string, { etag: string; payload: ListingsPayload }>());
   const noticeTimeoutRef = useRef<number | null>(null);
   const nextPageRef = useRef(2);
@@ -1071,6 +1113,48 @@ export default function Home() {
   useEffect(() => () => {
     if (noticeTimeoutRef.current !== null) window.clearTimeout(noticeTimeoutRef.current);
   }, []);
+
+  // Primer aviso para visitantes: un banner discreto bajo la cabecera ~1.5 s
+  // después de pintar. Nunca se muestra con sesión activa ni si el visitante
+  // lo cerró hace poco (queda registrado en localStorage).
+  useEffect(() => {
+    if (!authLoaded || currentUser || welcomeNudgeDismissed) return;
+    if (autoNudgesShownRef.current >= MAX_AUTO_GOOGLE_NUDGES) return;
+    const timer = window.setTimeout(() => {
+      autoNudgesShownRef.current += 1;
+      setShowGoogleNudge(true);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [authLoaded, currentUser, welcomeNudgeDismissed]);
+
+  // Segundo aviso, solo si cerraron el primero: un toast corto al bajar ~40 %
+  // de los resultados o tras ~20 s seguir como visitante, lo que pase antes.
+  useEffect(() => {
+    if (!authLoaded || currentUser || !welcomeNudgeDismissed) return;
+    if (autoNudgesShownRef.current >= MAX_AUTO_GOOGLE_NUDGES) return;
+    const memory = readGoogleNudgeMemory();
+    if (typeof memory.reminderShownAt === "number" && Date.now() - memory.reminderShownAt < GOOGLE_NUDGE_COOLDOWN_MS) return;
+    let fired = false;
+    function cleanup() {
+      window.clearTimeout(timer);
+      window.removeEventListener("scroll", handleScroll);
+    }
+    function fire() {
+      if (fired) return;
+      fired = true;
+      cleanup();
+      autoNudgesShownRef.current += 1;
+      saveGoogleNudgeMemory({ reminderShownAt: Date.now() });
+      flashNotice("Inicia sesión con Google para no perder tus favoritos.");
+    }
+    function handleScroll() {
+      const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+      if (scrollable > 0 && window.scrollY / scrollable >= 0.4) fire();
+    }
+    const timer = window.setTimeout(fire, 20_000);
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return cleanup;
+  }, [authLoaded, currentUser, welcomeNudgeDismissed]);
 
   useEffect(() => {
     function closeTransientUi(event: KeyboardEvent) {
@@ -1309,16 +1393,30 @@ export default function Home() {
     if (!currentUser) {
       setPublishAfterLogin(true);
       setShowLogin(true);
-      flashNotice(authLoaded ? "Inicia sesión para publicar" : "Verificando tu sesión…");
+      flashNotice(authLoaded ? "Inicia sesión con Google para publicar" : "Verificando tu sesión…");
       return;
     }
     setPublishAfterLogin(false);
     setShowPublish(true);
   }
 
+  // Cierra el banner de bienvenida y lo anota en localStorage. Si el visitante
+  // tocó «Continuar con Google» se abre el acceso; si solo lo cerró, queda
+  // armado el único recordatorio corto de la visita.
+  function dismissGoogleNudge(continueWithGoogle: boolean) {
+    setShowGoogleNudge(false);
+    saveGoogleNudgeMemory({ welcomeDismissedAt: Date.now() });
+    if (continueWithGoogle) {
+      openLogin();
+      return;
+    }
+    setWelcomeNudgeDismissed(true);
+  }
+
   function authenticated(user: AuthUser) {
     setCurrentUser(user);
     setShowLogin(false);
+    setShowGoogleNudge(false);
     flashNotice(`Bienvenido, ${user.name}`);
     if (publishAfterLogin) {
       setPublishAfterLogin(false);
@@ -1378,7 +1476,10 @@ export default function Home() {
           </nav>
 
           <div className="header-actions">
-            <button className="host-link" onClick={openLogin}>{currentUser ? "Mi cuenta" : "Iniciar sesión"}</button>
+            {/* CTA principal del anfitrión: publicar. Si no hay sesión,
+                requestPublish abre el acceso con Google primero; la cuenta
+                sigue a un toque en el menú (hamburguesa). */}
+            <button className="host-link" onClick={requestPublish}>Publicar un anuncio</button>
             <button className="globe-button" aria-label="Idioma y moneda"><GlobeIcon /></button>
             <button className="menu-trigger" aria-label="Abrir menú" aria-expanded={showMenu} onClick={() => setShowMenu((open) => !open)}>
               <span className="hamburger"><i /><i /><i /></span>
@@ -1498,6 +1599,15 @@ export default function Home() {
           </div>
         )}
       </header>
+
+      {showGoogleNudge && !currentUser && (
+        <div className="google-nudge-banner" role="status" aria-live="polite">
+          <span className="google-nudge-icon" aria-hidden="true"><GoogleGIcon /></span>
+          <p>Entra con Google para guardar favoritos y publicar.</p>
+          <button type="button" className="google-nudge-action" onClick={() => dismissGoogleNudge(true)}>Continuar con Google</button>
+          <button type="button" className="google-nudge-close" onClick={() => dismissGoogleNudge(false)} aria-label="Cerrar aviso de acceso con Google">×</button>
+        </div>
+      )}
 
       <main className="results-layout" id="results">
         <section className="list-panel">
@@ -1627,7 +1737,11 @@ export default function Home() {
       <footer className="footer">
         <div className="footer-top">
           <div><strong>Asistencia</strong><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Centro de ayuda</button><button onClick={() => flashNotice("Próximamente: seguridad y confianza")}>Seguridad</button></div>
-          <div><strong>Publica</strong><button onClick={requestPublish}>Anuncia tu espacio</button><button onClick={openPlans}>Planes anuales</button></div>
+          <div className="footer-publish-card">
+            <strong>Publica</strong>
+            <button className="footer-publish-primary" onClick={requestPublish}>Anuncia tu espacio</button>
+            <button className="footer-publish-secondary" onClick={openPlans}>Planes anuales</button>
+          </div>
           <div><strong>{BRAND}</strong><button onClick={() => flashNotice(`Muy pronto: conoce al equipo ${BRAND}`)}>Quiénes somos</button><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Contacto</button></div>
         </div>
         <div className="footer-bottom"><span>© 2026 {BRAND} · llaves365.com · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
@@ -2054,10 +2168,12 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
   const [depaPublishFeatures, setDepaPublishFeatures] = useState<DepaFeature[]>([]);
   const [photos, setPhotos] = useState<PublishPhoto[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [publishStep, setPublishStep] = useState<"photos" | "listing" | null>(null);
   const [error, setError] = useState("");
   const photoIdRef = useRef(0);
   const photosRef = useRef<PublishPhoto[]>([]);
   const copy = publishCopy[activeCategory];
+  const validPhotos = photos.filter((photo) => !photo.error);
 
   useEffect(() => {
     photosRef.current = photos;
@@ -2071,23 +2187,40 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
     if (!files?.length) return;
     let message = "";
     const accepted: PublishPhoto[] = [];
+    const rejected: PublishPhoto[] = [];
     let total = photos.length;
     for (const file of Array.from(files)) {
-      if (!PHOTO_MIME_TYPES.includes(file.type)) { message = "Solo se aceptan fotos JPG, PNG o WebP."; continue; }
-      if (file.size > MAX_PHOTO_BYTES) { message = "Cada foto debe pesar menos de 12 MB."; continue; }
       if (total >= MAX_PUBLISH_PHOTOS) { message = `Puedes subir máximo ${MAX_PUBLISH_PHOTOS} fotos.`; break; }
       photoIdRef.current += 1;
-      accepted.push({ id: photoIdRef.current, file, preview: URL.createObjectURL(file) });
+      const preview = URL.createObjectURL(file);
+      // Una foto inválida no se descarta en silencio: su casilla se queda en
+      // la cuadrícula con el motivo, y las demás fotos válidas sí entran.
+      if (!PHOTO_MIME_TYPES.includes(file.type)) {
+        rejected.push({ id: photoIdRef.current, file, preview, error: "Formato no válido. Usa JPG, PNG o WebP." });
+      } else if (file.size > MAX_PHOTO_BYTES) {
+        rejected.push({ id: photoIdRef.current, file, preview, error: "Pesa más de 12 MB. Elige una versión más ligera." });
+      } else {
+        accepted.push({ id: photoIdRef.current, file, preview });
+      }
       total += 1;
     }
-    if (accepted.length) setPhotos((current) => [...current, ...accepted]);
+    if (accepted.length || rejected.length) {
+      // Las válidas van primero (la portada siempre es una foto real) y las
+      // marcadas con error quedan al final hasta que el dueño las quite.
+      setPhotos((current) => [
+        ...current.filter((photo) => !photo.error),
+        ...accepted,
+        ...current.filter((photo) => photo.error),
+        ...rejected,
+      ]);
+    }
     setError(message);
   }
 
   function makeCover(id: number) {
     setPhotos((current) => {
       const index = current.findIndex((photo) => photo.id === id);
-      if (index <= 0) return current;
+      if (index <= 0 || current[index].error) return current;
       return [current[index], ...current.slice(0, index), ...current.slice(index + 1)];
     });
   }
@@ -2124,14 +2257,19 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (photos.length === 0) {
-      setError("Agrega al menos una foto de tu anuncio.");
+    if (validPhotos.length === 0) {
+      setError(photos.length > 0
+        ? "Las fotos marcadas en rojo no se pueden publicar. Quítalas y agrega al menos una foto válida."
+        : "Agrega al menos una foto de tu anuncio.");
       return;
     }
     setIsSaving(true);
     setError("");
     try {
-      const gallery = await uploadPublishPhotos(photos.map((photo) => photo.file));
+      // Recién aquí se suben las fotos: la vista previa fue 100 % local.
+      setPublishStep("photos");
+      const gallery = await uploadPublishPhotos(validPhotos.map((photo) => photo.file));
+      setPublishStep("listing");
       const response = await fetch("/api/listings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2153,6 +2291,7 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
       setError(submitError instanceof Error ? submitError.message : "Revisa los datos e intenta otra vez.");
     } finally {
       setIsSaving(false);
+      setPublishStep(null);
     }
   }
 
@@ -2194,13 +2333,14 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
         </div></fieldset>}
         <label>Descripción<small className="field-hint">{copy.helper}</small><textarea required rows={4} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder={copy.placeholder} /></label>
         <div className="photo-uploader">
-          <div className="photo-uploader-head"><span className="publish-feature-label">Fotos del anuncio</span><span className="photo-counter">{photos.length} / {MAX_PUBLISH_PHOTOS}</span></div>
+          <div className="photo-uploader-head"><span className="publish-feature-label">Fotos del anuncio</span><span className="photo-counter">{validPhotos.length} / {MAX_PUBLISH_PHOTOS}</span></div>
           <div className="photo-grid">
             {photos.map((photo, index) => (
-              <div key={photo.id} className={`photo-thumb ${index === 0 ? "cover" : ""}`}>
-                <button type="button" className="photo-cover-button" onClick={() => makeCover(photo.id)} aria-label={index === 0 ? `Foto ${index + 1}, es la portada` : `Usar la foto ${index + 1} como portada`}>
+              <div key={photo.id} className={`photo-thumb ${index === 0 && !photo.error ? "cover" : ""} ${photo.error ? "has-error" : ""}`.trim()}>
+                <button type="button" className="photo-cover-button" disabled={Boolean(photo.error)} onClick={() => makeCover(photo.id)} aria-label={photo.error ? `Foto ${index + 1} con error: ${photo.error}` : index === 0 ? `Foto ${index + 1}, es la portada` : `Usar la foto ${index + 1} como portada`}>
                   <img src={photo.preview} alt="" />
-                  {index === 0 && <span className="cover-badge">Portada</span>}
+                  {index === 0 && !photo.error && <span className="cover-badge">Portada</span>}
+                  {photo.error && <span className="photo-error" role="alert">{photo.error}</span>}
                 </button>
                 <button type="button" className="photo-remove" onClick={() => removePhoto(photo.id)} aria-label={`Quitar la foto ${index + 1}`}>×</button>
               </div>
@@ -2212,10 +2352,10 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
               </label>
             )}
           </div>
-          <small className="photo-hint">De 1 a {MAX_PUBLISH_PHOTOS} fotos JPG, PNG o WebP (máximo 12 MB cada una). La primera es la portada: toca otra foto para hacerla portada. Al subirlas se ajustan automáticamente a un tamaño profesional.</small>
+          <small className="photo-hint">De 1 a {MAX_PUBLISH_PHOTOS} fotos JPG, PNG o WebP (máximo 12 MB cada una). Se muestran aquí al instante y se suben recién cuando tocas «Guardar y publicar». La primera es la portada: toca otra foto para hacerla portada.</small>
         </div>
         {error && <p className="form-error">{error}</p>}
-        <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Guardando…" : "Guardar y publicar"}<Icon>→</Icon></button>
+        <button className="primary-button wide" disabled={isSaving}>{isSaving ? (publishStep === "photos" ? "Preparando fotos…" : "Publicando…") : "Guardar y publicar"}<Icon>→</Icon></button>
       </form>
     </Modal>
   );

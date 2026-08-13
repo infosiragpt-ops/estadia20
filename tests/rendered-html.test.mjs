@@ -30,6 +30,21 @@ test("ships the finished estadia20 marketplace", async () => {
   assert.match(page, /aria-live="polite"/);
   assert.match(page, /SwipeGallery/);
   assert.match(page, /detail-swipe-gallery/);
+  // CTA de publicación en cabecera y pie, y avisos de Google para visitantes.
+  assert.match(page, /className="host-link" onClick={requestPublish}>Publicar un anuncio</);
+  assert.match(page, /footer-publish-card/);
+  assert.match(page, /footer-publish-primary/);
+  assert.match(page, /llaves365-google-nudge/);
+  assert.match(page, /google-nudge-banner/);
+  assert.match(page, /Entra con Google para guardar favoritos y publicar\./);
+  assert.match(page, /Inicia sesión con Google para no perder tus favoritos\./);
+  // Las fotos del anuncio se previsualizan en local y se suben al guardar.
+  assert.match(page, /Preparando fotos…/);
+  assert.match(page, /photo-error/);
+  assert.match(styles, /\.host-link/);
+  assert.match(styles, /\.footer-publish-card/);
+  assert.match(styles, /\.google-nudge-banner/);
+  assert.match(styles, /\.photo-error/);
   assert.match(styles, /\.results-error/);
   assert.match(styles, /prefers-reduced-motion/);
   assert.match(styles, /\.listing-grid/);
