@@ -124,7 +124,22 @@ type AdminUserRow = {
   authProvider: string;
   role: string;
   createdAt: string;
+  lastLoginAt?: string | null;
+  lastLoginProvider?: string | null;
   listings: number;
+  listingsByCategory?: Record<string, number>;
+};
+
+type AdminActivityEvent = {
+  type: "login" | "listing";
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  provider?: string;
+  listingId?: number;
+  title?: string;
+  category?: string;
+  createdAt: string;
 };
 
 type AdminInquiriesData = {
@@ -145,6 +160,8 @@ type GoogleIdentityClient = {
     callback: (response: GoogleCredentialResponse) => void;
     auto_select?: boolean;
     cancel_on_tap_outside?: boolean;
+    itp_support?: boolean;
+    use_fedcm_for_prompt?: boolean;
   }) => void;
   renderButton: (
     parent: HTMLElement,
@@ -938,7 +955,7 @@ export default function Home() {
   if (search.trim()) activeFilterChips.push({ key: "search", label: search.trim(), clear: () => setSearch("") });
   if (bedrooms !== "Todos" && activeCategory === "Depas") activeFilterChips.push({ key: "bedrooms", label: bedroomSummary, clear: () => setBedrooms("Todos") });
   if ((minPrice || maxPrice) && activeCategory === "Depas") activeFilterChips.push({ key: "budget", label: budgetSummary, clear: () => { setMinPrice(""); setMaxPrice(""); } });
-  if (maxPrice && activeCategory !== "Roomies" && activeCategory !== "Depas") activeFilterChips.push({ key: "budget", label: `Hasta S/ ${Number(maxPrice).toLocaleString("es-PE")}`, clear: () => setMaxPrice("") });
+  if (maxPrice && activeCategory !== "Depas") activeFilterChips.push({ key: "budget", label: `Hasta S/ ${Number(maxPrice).toLocaleString("es-PE")}`, clear: () => setMaxPrice("") });
   if (activeCategory === "Depas") selectedDepaFeatures.forEach((feature) => activeFilterChips.push({ key: feature, label: feature, clear: () => toggleDepaFeature(feature) }));
   if (activeCategory === "Transporte" && service !== "Todos") activeFilterChips.push({ key: "service", label: service, clear: () => setService("Todos") });
 
@@ -972,10 +989,16 @@ export default function Home() {
   }
 
   function openDepaFilters() {
+    setShowMenu(false);
     setShowSearchOptions(false);
     setShowAirbnbCalendar(false);
     setShowAirbnbGuests(false);
     setShowDepaFilters(true);
+  }
+
+  function openFiltersModal() {
+    setShowMenu(false);
+    setShowFilters(true);
   }
 
   function openAirbnbCalendar(stage: AirbnbDateStage) {
@@ -1091,6 +1114,7 @@ export default function Home() {
   }
 
   function requestPublish() {
+    setShowMenu(false);
     if (!currentUser) {
       setPublishAfterLogin(true);
       setShowLogin(true);
@@ -1128,8 +1152,19 @@ export default function Home() {
   }
 
   function openListing(listing: Listing) {
+    setShowMenu(false);
     setSelectedImageIndex(galleryIndexes[listing.id] ?? 0);
     setSelectedListing(listing);
+  }
+
+  function openLogin() {
+    setShowMenu(false);
+    setShowLogin(true);
+  }
+
+  function openPlans() {
+    setShowMenu(false);
+    setShowPlans(true);
   }
 
   return (
@@ -1151,7 +1186,7 @@ export default function Home() {
           </nav>
 
           <div className="header-actions">
-            <button className="host-link" onClick={() => setShowLogin(true)}>{currentUser ? "Mi cuenta" : "Iniciar sesión"}</button>
+            <button className="host-link" onClick={openLogin}>{currentUser ? "Mi cuenta" : "Iniciar sesión"}</button>
             <button className="globe-button" aria-label="Idioma y moneda"><GlobeIcon /></button>
             <button className="menu-trigger" aria-label="Abrir menú" aria-expanded={showMenu} onClick={() => setShowMenu((open) => !open)}>
               <span className="hamburger"><i /><i /><i /></span>
@@ -1255,14 +1290,18 @@ export default function Home() {
 
         {showMenu && (
           <div className="menu-popover">
-            <button className="menu-strong" onClick={() => { setShowLogin(true); setShowMenu(false); }}>{currentUser ? `Mi cuenta · ${currentUser.name}` : "Iniciar sesión"}</button>
-            {currentUser?.role === "admin" && <button onClick={() => { setShowAdminPanel(true); setShowMenu(false); }}>Panel de administración</button>}
-            {currentUser && <button onClick={() => { setShowMyListings(true); setShowMenu(false); }}>Mis anuncios</button>}
-            <button onClick={() => { setShowPlans(true); setShowMenu(false); }}>Ver planes para publicar</button>
-            <button onClick={() => { setShowFilters(true); setShowMenu(false); }}>Filtros de búsqueda</button>
+            <span className="menu-section-label">Cuenta</span>
+            <button className="menu-strong" onClick={openLogin}>{currentUser ? `Mi cuenta · ${currentUser.name}` : "Iniciar sesión"}</button>
+            {currentUser?.role === "admin" && <button onClick={() => { setShowMenu(false); setShowAdminPanel(true); }}>Panel de administración</button>}
+            {currentUser && <button onClick={() => { setShowMenu(false); setShowMyListings(true); }}>Mis anuncios</button>}
+            <button onClick={() => { flashNotice(`${favorites.length} favoritos guardados`); setShowMenu(false); }}>Mis favoritos {favorites.length > 0 && <span>{favorites.length}</span>}</button>
             <div className="menu-divider" />
-            <button onClick={() => { requestPublish(); setShowMenu(false); }}>Publicar un anuncio</button>
-            <button onClick={() => { flashNotice(`${favorites.length} favoritos guardados`); setShowMenu(false); }}>Mis favoritos <span>{favorites.length}</span></button>
+            <span className="menu-section-label">Publicar</span>
+            <button onClick={requestPublish}>Publicar un anuncio</button>
+            <button onClick={openPlans}>Ver planes para publicar</button>
+            <div className="menu-divider" />
+            <span className="menu-section-label">Ayuda</span>
+            <button onClick={openFiltersModal}>Filtros de búsqueda</button>
             <button onClick={() => { flashNotice(`Soporte directo: ${SUPPORT_EMAIL}`); setShowMenu(false); }}>Centro de ayuda</button>
           </div>
         )}
@@ -1281,7 +1320,7 @@ export default function Home() {
             </div>
             <div className="results-actions">
               <label className="sort-control"><span>Ordenar por</span><select value={sort} onChange={(event) => setSort(event.target.value as ListingSort)} aria-label="Ordenar resultados">{sortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-              {activeCategory !== "Roomies" && <button className="toolbar-filter" onClick={() => activeCategory === "Depas" ? openDepaFilters() : setShowFilters(true)}><FilterIcon /><span>Filtros</span>{filterButtonCount > 0 && <b>{filterButtonCount}</b>}</button>}
+              <button className={`toolbar-filter ${activeCategory === "Roomies" ? "mobile-only-filter" : ""}`} onClick={() => activeCategory === "Depas" ? openDepaFilters() : openFiltersModal()} aria-label={`Abrir filtros${filterButtonCount ? `, ${filterButtonCount} activos` : ""}`}><FilterIcon /><span>Filtros</span>{filterButtonCount > 0 && <b>{filterButtonCount}</b>}</button>
             </div>
           </div>
 
@@ -1370,7 +1409,7 @@ export default function Home() {
       <footer className="footer">
         <div className="footer-top">
           <div><strong>Asistencia</strong><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Centro de ayuda</button><button onClick={() => flashNotice("Próximamente: seguridad y confianza")}>Seguridad</button></div>
-          <div><strong>Publica</strong><button onClick={requestPublish}>Anuncia tu espacio</button><button onClick={() => setShowPlans(true)}>Planes anuales</button></div>
+          <div><strong>Publica</strong><button onClick={requestPublish}>Anuncia tu espacio</button><button onClick={openPlans}>Planes anuales</button></div>
           <div><strong>{BRAND}</strong><button onClick={() => flashNotice(`Muy pronto: conoce al equipo ${BRAND}`)}>Quiénes somos</button><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Contacto</button></div>
         </div>
         <div className="footer-bottom"><span>© 2026 {BRAND} · estadia20.com · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
@@ -1531,6 +1570,7 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
   const [showPasswordAccess, setShowPasswordAccess] = useState(false);
   const [googleStatus, setGoogleStatus] = useState<"loading" | "ready" | "unavailable">("loading");
   const [googleMessage, setGoogleMessage] = useState("");
+  const [googleRetry, setGoogleRetry] = useState(0);
   const googleButtonRef = useRef<HTMLDivElement>(null);
   const authenticatedRef = useRef(onAuthenticated);
 
@@ -1541,6 +1581,7 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
   useEffect(() => {
     if (user) return;
     let cancelled = false;
+    let renderCheckTimeout: number | undefined;
 
     async function configureGoogle() {
       try {
@@ -1577,6 +1618,10 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
           },
           auto_select: false,
           cancel_on_tap_outside: false,
+          // Mantiene el flujo del botón funcionando en Safari (ITP) y en los
+          // Chrome recientes que ya bloquean cookies de terceros (FedCM).
+          itp_support: true,
+          use_fedcm_for_prompt: true,
         });
         window.google.accounts.id.renderButton(googleButtonRef.current, {
           type: "standard",
@@ -1587,7 +1632,20 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
           logo_alignment: "left",
           width: Math.max(200, Math.min(344, Math.floor(googleButtonRef.current.getBoundingClientRect().width))),
         });
-        if (!cancelled) setGoogleStatus("ready");
+        if (cancelled) return;
+        setGoogleStatus("ready");
+        // Si Google rechaza el origen (falta autorizar el dominio en Google
+        // Cloud Console) el iframe del botón nunca aparece: avisamos en claro
+        // en lugar de dejar un espacio vacío.
+        renderCheckTimeout = window.setTimeout(() => {
+          if (cancelled) return;
+          if (!googleButtonRef.current?.querySelector("iframe")) {
+            setGoogleStatus("unavailable");
+            setGoogleMessage(
+              "Google no aceptó este dominio todavía. Escríbenos a " + SUPPORT_EMAIL + " o usa tu correo y contraseña más abajo.",
+            );
+          }
+        }, 3000);
       } catch (setupError) {
         if (!cancelled) {
           setGoogleStatus("unavailable");
@@ -1599,8 +1657,9 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
     void configureGoogle();
     return () => {
       cancelled = true;
+      if (renderCheckTimeout !== undefined) window.clearTimeout(renderCheckTimeout);
     };
-  }, [user]);
+  }, [user, googleRetry]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1663,6 +1722,19 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
               {googleStatus === "loading" && <span className="google-loading">Preparando acceso con Google…</span>}
               {googleStatus === "unavailable" && <span className="google-unavailable">{googleMessage}</span>}
             </div>
+            {googleStatus === "unavailable" && (
+              <button
+                type="button"
+                className="google-retry"
+                onClick={() => {
+                  setGoogleStatus("loading");
+                  setGoogleMessage("");
+                  setGoogleRetry((attempt) => attempt + 1);
+                }}
+              >
+                Reintentar acceso con Google
+              </button>
+            )}
             <small>Google confirma tu identidad; {BRAND} crea una sesión segura en este dispositivo.</small>
           </div>
           {error && <p className="form-error auth-error">{error}</p>}
@@ -1775,6 +1847,17 @@ function formatAdminDate(value?: string) {
   return new Intl.DateTimeFormat("es-PE", { day: "numeric", month: "short", year: "numeric" }).format(date);
 }
 
+function formatAdminDateTime(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("es-PE", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function providerLabel(provider?: string | null) {
+  return provider === "google" ? "Google" : "Correo y contraseña";
+}
+
 function usePanelData<T>(url: string) {
   const [data, setData] = useState<T | null>(null);
   const [status, setStatus] = useState<PanelStatus>("loading");
@@ -1807,9 +1890,10 @@ function usePanelData<T>(url: string) {
 }
 
 function AdminPanelModal({ onClose, onListingsChanged, notify }: { onClose: () => void; onListingsChanged: () => void; notify: (message: string, tone?: "success" | "error") => void }) {
-  const [tab, setTab] = useState<"overview" | "listings" | "inquiries" | "users">("overview");
+  const [tab, setTab] = useState<"overview" | "activity" | "listings" | "inquiries" | "users">("overview");
   const tabs = [
     { id: "overview" as const, label: "Resumen" },
+    { id: "activity" as const, label: "Actividad" },
     { id: "listings" as const, label: "Anuncios" },
     { id: "inquiries" as const, label: "Consultas" },
     { id: "users" as const, label: "Usuarios" },
@@ -1822,6 +1906,7 @@ function AdminPanelModal({ onClose, onListingsChanged, notify }: { onClose: () =
         {tabs.map((item) => <button key={item.id} role="tab" aria-selected={tab === item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>)}
       </div>
       {tab === "overview" && <AdminOverviewTab />}
+      {tab === "activity" && <AdminActivityTab />}
       {tab === "listings" && <ListingManager mode="admin" onChanged={onListingsChanged} notify={notify} />}
       {tab === "inquiries" && <AdminInquiriesTab />}
       {tab === "users" && <AdminUsersTab />}
@@ -1884,6 +1969,40 @@ function AdminInquiriesTab() {
   );
 }
 
+function AdminActivityTab() {
+  const { data, status, error } = usePanelData<{ events: AdminActivityEvent[] }>("/api/admin/activity");
+  if (status === "loading") return <p className="panel-note">Cargando actividad…</p>;
+  if (status === "error" || !data) return <p className="form-error">{error || "No se pudo cargar la actividad"}</p>;
+  if (!data.events.length) return <p className="panel-note">Todavía no hay actividad registrada.</p>;
+
+  return (
+    <div className="admin-section">
+      <h3>Actividad reciente</h3>
+      <ul className="activity-feed">
+        {data.events.map((event) => (
+          <li key={event.id} className={event.type === "login" ? "activity-login" : "activity-listing"}>
+            <span className="activity-icon" aria-hidden="true">{event.type === "login" ? "→" : "＋"}</span>
+            <div>
+              {event.type === "login" ? (
+                <>
+                  <strong>{event.name || event.email} inició sesión</strong>
+                  <small>{event.email} · {providerLabel(event.provider)}</small>
+                </>
+              ) : (
+                <>
+                  <strong>{event.name || "Alguien"} publicó “{event.title}”</strong>
+                  <small>{event.email ? `${event.email} · ` : ""}{categoryLabel(event.category ?? "")}</small>
+                </>
+              )}
+            </div>
+            <time>{formatAdminDateTime(event.createdAt)}</time>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function AdminUsersTab() {
   const { data, status, error } = usePanelData<{ users: AdminUserRow[]; total?: number }>("/api/admin/users");
   if (status === "loading") return <p className="panel-note">Cargando usuarios…</p>;
@@ -1893,13 +2012,30 @@ function AdminUsersTab() {
   return (
     <div className="admin-section">
       <h3>Cuentas registradas ({data.total ?? data.users.length}{(data.total ?? 0) > data.users.length ? ` · mostrando ${data.users.length}` : ""})</h3>
-      <ul className="admin-list">
-        {data.users.map((user) => (
-          <li key={user.id}>
-            <span>{user.name} <small>· {user.email} · {user.authProvider === "google" ? "Google" : "Correo"} · {formatAdminDate(user.createdAt)}</small>{user.role === "admin" && <b className="role-chip">Admin</b>}</span>
-            <b>{user.listings} {user.listings === 1 ? "anuncio" : "anuncios"}</b>
-          </li>
-        ))}
+      <ul className="admin-list user-list">
+        {data.users.map((user) => {
+          const breakdown = Object.entries(user.listingsByCategory ?? {}).filter(([, total]) => total > 0);
+          return (
+            <li key={user.id}>
+              <span>
+                {user.name}{user.role === "admin" && <b className="role-chip">Admin</b>}
+                <small>{user.email}</small>
+                <small>
+                  {user.lastLoginAt
+                    ? `Último acceso ${formatAdminDateTime(user.lastLoginAt)} · ${providerLabel(user.lastLoginProvider ?? user.authProvider)}`
+                    : `Sin accesos registrados · Cuenta ${user.authProvider === "google" ? "Google" : "de correo"}`}
+                  {` · Registro ${formatAdminDate(user.createdAt)}`}
+                </small>
+                {breakdown.length > 0 && (
+                  <span className="user-listing-chips">
+                    {breakdown.map(([category, total]) => <i key={category}>{categoryLabel(category)} {total}</i>)}
+                  </span>
+                )}
+              </span>
+              <b>{user.listings} {user.listings === 1 ? "anuncio" : "anuncios"}</b>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

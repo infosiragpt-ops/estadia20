@@ -377,10 +377,26 @@ def initialize_database() -> None:
                 "ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'password'"
             ),
             "role": "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+            "last_login_at": "ALTER TABLE users ADD COLUMN last_login_at TEXT",
+            "last_login_provider": (
+                "ALTER TABLE users ADD COLUMN last_login_provider TEXT"
+            ),
         }
         for column, migration in user_migrations.items():
             if column not in user_columns:
                 database.execute(migration)
+        database.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS login_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              provider TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_events_created_at
+              ON login_events (created_at DESC, id DESC);
+            """
+        )
         database.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub
@@ -515,6 +531,29 @@ def verify_password(password: str, encoded: str) -> bool:
         return hmac.compare_digest(actual, expected)
     except (ValueError, TypeError, binascii.Error):
         return False
+
+
+def record_login(database: sqlite3.Connection, user_id: int, provider: str) -> None:
+    """Guarda el último acceso del usuario y lo agrega al historial de actividad."""
+    database.execute(
+        """
+        UPDATE users
+        SET last_login_at = CURRENT_TIMESTAMP, last_login_provider = ?
+        WHERE id = ?
+        """,
+        (provider, user_id),
+    )
+    database.execute(
+        "INSERT INTO login_events (user_id, provider) VALUES (?, ?)",
+        (user_id, provider),
+    )
+    # El historial es para el panel del administrador; basta con lo reciente.
+    database.execute(
+        """
+        DELETE FROM login_events
+        WHERE id NOT IN (SELECT id FROM login_events ORDER BY id DESC LIMIT 500)
+        """
+    )
 
 
 def user_dict(row: sqlite3.Row) -> dict[str, object]:
@@ -1230,6 +1269,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             self.admin_users()
         elif parsed.path == "/api/admin/inquiries":
             self.admin_inquiries()
+        elif parsed.path == "/api/admin/activity":
+            self.admin_activity()
         else:
             self.send_api_error("Ruta no encontrada.", HTTPStatus.NOT_FOUND, "not_found")
 
@@ -1360,14 +1401,26 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             rows = database.execute(
                 """
                 SELECT users.id, users.name, users.email, users.auth_provider,
-                       users.role, users.created_at,
+                       users.role, users.created_at, users.last_login_at,
+                       users.last_login_provider,
                        (SELECT COUNT(*) FROM listings
                         WHERE listings.user_id = users.id) AS listing_count
                 FROM users
-                ORDER BY users.created_at DESC, users.id DESC
+                ORDER BY users.last_login_at DESC, users.created_at DESC, users.id DESC
                 LIMIT 200
                 """
             ).fetchall()
+            category_rows = database.execute(
+                """
+                SELECT user_id, category, COUNT(*) AS total
+                FROM listings
+                WHERE user_id IS NOT NULL
+                GROUP BY user_id, category
+                """
+            ).fetchall()
+        listings_by_user: dict[int, dict[str, int]] = defaultdict(dict)
+        for row in category_rows:
+            listings_by_user[row["user_id"]][row["category"]] = row["total"]
         self.send_json(
             {
                 "total": users_total,
@@ -1379,12 +1432,64 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                         "authProvider": row["auth_provider"],
                         "role": row["role"],
                         "createdAt": row["created_at"],
+                        "lastLoginAt": row["last_login_at"],
+                        "lastLoginProvider": row["last_login_provider"],
                         "listings": row["listing_count"],
+                        "listingsByCategory": listings_by_user.get(row["id"], {}),
                     }
                     for row in rows
                 ],
             }
         )
+
+    def admin_activity(self) -> None:
+        with connect() as database:
+            login_rows = database.execute(
+                """
+                SELECT login_events.id, login_events.provider,
+                       login_events.created_at, users.name, users.email
+                FROM login_events JOIN users ON users.id = login_events.user_id
+                ORDER BY login_events.created_at DESC, login_events.id DESC
+                LIMIT 60
+                """
+            ).fetchall()
+            listing_rows = database.execute(
+                """
+                SELECT listings.id, listings.title, listings.category,
+                       listings.created_at, users.name AS user_name,
+                       users.email AS user_email, listings.owner_name
+                FROM listings LEFT JOIN users ON users.id = listings.user_id
+                ORDER BY listings.created_at DESC, listings.id DESC
+                LIMIT 60
+                """
+            ).fetchall()
+        events: list[dict[str, object]] = []
+        for row in login_rows:
+            events.append(
+                {
+                    "type": "login",
+                    "id": f"login-{row['id']}",
+                    "name": row["name"],
+                    "email": row["email"],
+                    "provider": row["provider"],
+                    "createdAt": row["created_at"],
+                }
+            )
+        for row in listing_rows:
+            events.append(
+                {
+                    "type": "listing",
+                    "id": f"listing-{row['id']}",
+                    "listingId": row["id"],
+                    "title": row["title"],
+                    "category": row["category"],
+                    "name": row["user_name"] or row["owner_name"],
+                    "email": row["user_email"],
+                    "createdAt": row["created_at"],
+                }
+            )
+        events.sort(key=lambda event: str(event["createdAt"]), reverse=True)
+        self.send_json({"events": events[:80]})
 
     def admin_inquiries(self) -> None:
         with connect() as database:
@@ -1692,6 +1797,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     """,
                     (user_id,),
                 ).fetchone()
+                record_login(database, user_id, "password")
                 token = self.create_session(database, user_id)
         except sqlite3.IntegrityError:
             self.send_json(
@@ -1724,6 +1830,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     HTTPStatus.UNAUTHORIZED,
                 )
                 return
+            record_login(database, int(user["id"]), "password")
             token = self.create_session(database, int(user["id"]))
         self.send_json(
             {"user": user_dict(user)},
@@ -1831,6 +1938,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     """,
                     (user_id,),
                 ).fetchone()
+                record_login(database, user_id, "google")
                 token = self.create_session(database, user_id)
         except sqlite3.IntegrityError:
             self.send_json(
