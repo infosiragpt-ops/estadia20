@@ -923,6 +923,10 @@ export default function Home() {
   const [showPublish, setShowPublish] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [showMyListings, setShowMyListings] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(false);
+  const [favoriteDetails, setFavoriteDetails] = useState<Listing[]>([]);
+  const [favoritesStatus, setFavoritesStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [favoritesRetry, setFavoritesRetry] = useState(0);
   const [publishAfterLogin, setPublishAfterLogin] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
@@ -946,6 +950,7 @@ export default function Home() {
   // a mostrar; en ese caso solo queda armado el recordatorio corto.
   const [welcomeNudgeDismissed, setWelcomeNudgeDismissed] = useState(welcomeNudgeRecentlyDismissed);
   const autoNudgesShownRef = useRef(0);
+  const favoritesFetchedRef = useRef("");
   const listingsCacheRef = useRef(new Map<string, { etag: string; payload: ListingsPayload }>());
   const noticeTimeoutRef = useRef<number | null>(null);
   const nextPageRef = useRef(2);
@@ -1110,6 +1115,40 @@ export default function Home() {
     };
   }, []);
 
+  // Al abrir «Mis favoritos», si algún guardado no está entre los anuncios ya
+  // cargados se piden todos al backend (mismo visitante por cookie) para que
+  // la lista siempre muestre foto, precio y contacto completos. La firma en
+  // favoritesFetchedRef evita repetir la consulta si un favorito apunta a un
+  // anuncio que ya no existe en la base.
+  useEffect(() => {
+    if (!showFavorites || favorites.length === 0) return;
+    const signature = [...favorites].sort((left, right) => left - right).join(",");
+    if (favoritesFetchedRef.current === signature) return;
+    const knownIds = new Set([...listingsFromDb, ...favoriteDetails, ...demoListings].map((listing) => listing.id));
+    if (favorites.every((id) => knownIds.has(id))) return;
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) setFavoritesStatus("loading");
+    });
+    fetch("/api/favorites/listings", { signal: controller.signal, cache: "no-cache" })
+      .then(async (response) => {
+        const payload = (await response.json()) as { listings?: Listing[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? "No se pudieron cargar tus favoritos");
+        return payload.listings ?? [];
+      })
+      .then((favoriteListings) => {
+        if (controller.signal.aborted) return;
+        favoritesFetchedRef.current = signature;
+        setFavoriteDetails(favoriteListings);
+        setFavoritesStatus("idle");
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setFavoritesStatus("error");
+      });
+    return () => controller.abort();
+  }, [favoriteDetails, favorites, favoritesRetry, listingsFromDb, showFavorites]);
+
   useEffect(() => () => {
     if (noticeTimeoutRef.current !== null) window.clearTimeout(noticeTimeoutRef.current);
   }, []);
@@ -1233,6 +1272,19 @@ export default function Home() {
   if (maxPrice && activeCategory !== "Depas") activeFilterChips.push({ key: "budget", label: `Hasta S/ ${Number(maxPrice).toLocaleString("es-PE")}`, clear: () => setMaxPrice("") });
   if (activeCategory === "Depas") selectedDepaFeatures.forEach((feature) => activeFilterChips.push({ key: feature, label: feature, clear: () => toggleDepaFeature(feature) }));
   if (activeCategory === "Transporte" && service !== "Todos") activeFilterChips.push({ key: "service", label: service, clear: () => setService("Todos") });
+
+  // Los favoritos se resuelven contra los anuncios ya cargados; los que
+  // vienen del backend (favoriteDetails) pisan a los de demostración y los de
+  // la búsqueda activa pisan a ambos, respetando el orden en que se guardaron.
+  const favoriteListings = useMemo(() => {
+    const pool = new Map<number, Listing>();
+    for (const listing of demoListings) pool.set(listing.id, listing);
+    for (const listing of favoriteDetails) pool.set(listing.id, listing);
+    for (const listing of listingsFromDb) pool.set(listing.id, listing);
+    return favorites
+      .map((id) => pool.get(id))
+      .filter((listing): listing is Listing => Boolean(listing));
+  }, [favoriteDetails, favorites, listingsFromDb]);
 
   const selectedGallery = selectedListing ? listingImages(selectedListing) : [];
   const safeSelectedImageIndex = selectedGallery.length
@@ -1457,6 +1509,11 @@ export default function Home() {
     setShowPlans(true);
   }
 
+  function openFavorites() {
+    setShowMenu(false);
+    setShowFavorites(true);
+  }
+
   return (
     <div className="app-shell">
       <header className="market-header">
@@ -1476,10 +1533,24 @@ export default function Home() {
           </nav>
 
           <div className="header-actions">
-            {/* CTA principal del anfitrión: publicar. Si no hay sesión,
-                requestPublish abre el acceso con Google primero; la cuenta
-                sigue a un toque en el menú (hamburguesa). */}
-            <button className="host-link" onClick={requestPublish}>Publicar un anuncio</button>
+            {/* CTA principal de la cabecera: el acceso con Google para
+                visitantes, o la cuenta activa si ya hay sesión. Publicar vive
+                en el menú (hamburguesa) y en el pie de página. */}
+            {currentUser ? (
+              <button className="host-link account-link" onClick={openLogin} aria-label={`Abrir mi cuenta, ${currentUser.name}`}>
+                {currentUser.avatarUrl ? (
+                  <img className="account-avatar" src={currentUser.avatarUrl} alt="" referrerPolicy="no-referrer" />
+                ) : (
+                  <span className="account-initial" aria-hidden="true">{currentUser.name.trim().charAt(0).toUpperCase() || "☺"}</span>
+                )}
+                <span className="account-name">{currentUser.name.trim().split(/\s+/)[0] || "Mi cuenta"}</span>
+              </button>
+            ) : (
+              <button className="host-link login-link" onClick={openLogin}>
+                <span className="login-google-badge" aria-hidden="true"><GoogleGIcon /></span>
+                <span>Iniciar sesión</span>
+              </button>
+            )}
             <button className="globe-button" aria-label="Idioma y moneda"><GlobeIcon /></button>
             <button className="menu-trigger" aria-label="Abrir menú" aria-expanded={showMenu} onClick={() => setShowMenu((open) => !open)}>
               <span className="hamburger"><i /><i /><i /></span>
@@ -1587,11 +1658,15 @@ export default function Home() {
             <button className="menu-strong" onClick={openLogin}>{currentUser ? `Mi cuenta · ${currentUser.name}` : "Iniciar sesión"}</button>
             {currentUser?.role === "admin" && <button onClick={() => { setShowMenu(false); setShowAdminPanel(true); }}>Panel de administración</button>}
             {currentUser && <button onClick={() => { setShowMenu(false); setShowMyListings(true); }}>Mis anuncios</button>}
-            <button onClick={() => { flashNotice(`${favorites.length} favoritos guardados`); setShowMenu(false); }}>Mis favoritos {favorites.length > 0 && <span>{favorites.length}</span>}</button>
             <div className="menu-divider" />
             <span className="menu-section-label">Publicar</span>
-            <button onClick={requestPublish}>Publicar un anuncio</button>
+            {/* Entrada principal de publicación: la cabecera ahora es para el
+                acceso, así que publicar vive aquí, en el menú. */}
+            <button className="menu-strong" onClick={requestPublish}>Publicar un anuncio</button>
             <button onClick={openPlans}>Ver planes para publicar</button>
+            <div className="menu-divider" />
+            <span className="menu-section-label">Guardados</span>
+            <button onClick={openFavorites}>Mis favoritos {favorites.length > 0 && <span>{favorites.length}</span>}</button>
             <div className="menu-divider" />
             <span className="menu-section-label">Ayuda</span>
             <button onClick={openFiltersModal}>Filtros de búsqueda</button>
@@ -1796,6 +1871,47 @@ export default function Home() {
         <Modal onClose={() => setShowMyListings(false)} className="admin-modal">
           <div className="modal-header"><div><span className="modal-kicker">Tu espacio en {BRAND}</span><h2>Mis anuncios</h2></div><button className="close-button" onClick={() => setShowMyListings(false)} aria-label="Cerrar mis anuncios">×</button></div>
           <ListingManager mode="mine" onChanged={refreshListings} notify={flashNotice} />
+        </Modal>
+      )}
+
+      {showFavorites && (
+        <Modal onClose={() => setShowFavorites(false)} className="favorites-modal">
+          <div className="modal-header"><div><span className="modal-kicker">Tus guardados en {BRAND}</span><h2>Mis favoritos</h2></div><button className="close-button" onClick={() => setShowFavorites(false)} aria-label="Cerrar mis favoritos">×</button></div>
+          {favorites.length === 0 ? (
+            <div className="favorites-empty">
+              <span className="favorites-empty-heart" aria-hidden="true">♡</span>
+              <p>Todavía no guardaste favoritos. Toca el corazón en un anuncio para guardarlo.</p>
+            </div>
+          ) : (
+            <>
+              {favoritesStatus === "error" && (
+                <div className="results-error" role="alert">
+                  <div><strong>No pudimos cargar algunos favoritos</strong><span>Revisa tu conexión e inténtalo otra vez.</span></div>
+                  <button onClick={() => setFavoritesRetry((value) => value + 1)}>Reintentar</button>
+                </div>
+              )}
+              {favoritesStatus === "loading" && favoriteListings.length < favorites.length && <p className="favorites-loading" aria-live="polite">Cargando tus favoritos…</p>}
+              <div className="favorites-list">
+                {favoriteListings.map((listing) => (
+                  <article key={listing.id} className="favorite-row" onClick={() => openListing(listing)}>
+                    <img src={imageUrl(listingImages(listing)[0] ?? listing.image, 480)} alt={`${listing.title}, fotografía`} loading="lazy" decoding="async" />
+                    <div className="favorite-copy">
+                      <h3><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h3>
+                      <span className="favorite-location">{listing.location}</span>
+                      <p className="favorite-price"><strong>{money.format(listing.price)}</strong> <em>{listing.priceLabel}</em></p>
+                    </div>
+                    <div className="favorite-actions">
+                      <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`} title={`Chatear con ${listing.ownerName} en WhatsApp`}><WhatsappIcon /><span>WhatsApp</span></a>
+                      <button className="favorite-remove" disabled={favoriteMutations.includes(listing.id)} onClick={(event) => { event.stopPropagation(); toggleFavorite(listing.id); }} aria-label={`Quitar ${listing.title} de favoritos`}>{favoriteMutations.includes(listing.id) ? "…" : "♥"}</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
+          {!currentUser && favorites.length > 0 && (
+            <p className="favorites-guest-note"><span className="google-nudge-icon" aria-hidden="true"><GoogleGIcon /></span>Entra con Google para no perderlos en otro teléfono.</p>
+          )}
         </Modal>
       )}
 

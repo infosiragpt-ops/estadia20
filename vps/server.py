@@ -1414,6 +1414,27 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 visitor_id=visitor_id if is_new else None,
             )
             return
+        if parsed.path == "/api/favorites/listings":
+            # Anuncios completos de los favoritos del visitante (cookie), en el
+            # orden en que se guardaron: alimenta la hoja «Mis favoritos» sin
+            # depender de qué categoría esté cargada en la portada.
+            visitor_id, is_new = self.visitor()
+            with connect() as database:
+                rows = database.execute(
+                    """
+                    SELECT listings.*
+                    FROM favorites
+                    JOIN listings ON listings.id = favorites.listing_id
+                    WHERE favorites.visitor_id = ?
+                    ORDER BY favorites.created_at, favorites.listing_id
+                    """,
+                    (visitor_id,),
+                ).fetchall()
+            self.send_json(
+                {"listings": [listing_dict(row) for row in rows]},
+                visitor_id=visitor_id if is_new else None,
+            )
+            return
         if parsed.path == "/api/my/listings":
             self.my_listings()
             return

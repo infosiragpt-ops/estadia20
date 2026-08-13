@@ -56,10 +56,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .header-actions { justify-self: end; display: flex; align-items: center; gap: 8px; }
 /* CTA de anfitrión: píldora rosa con relieve suave que resalta sobre el
    amarillo (#ffbd00) de la cabecera sin verse estridente. */
-.host-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 11px 20px; border: 0; border-radius: 999px; background: linear-gradient(135deg, var(--rose-dark), var(--rose)); color: #fff; font-size: clamp(14px, 1vw, 20px); font-weight: 800; letter-spacing: -.01em; white-space: nowrap; box-shadow: 0 8px 18px rgba(150,5,60,.28), 0 2px 4px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.26); transition: transform .16s ease, box-shadow .16s ease, filter .16s ease; }
+.host-link { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 44px; padding: 11px 20px; border: 0; border-radius: 999px; background: linear-gradient(135deg, var(--rose-dark), var(--rose)); color: #fff; font-size: clamp(14px, 1vw, 20px); font-weight: 800; letter-spacing: -.01em; white-space: nowrap; box-shadow: 0 8px 18px rgba(150,5,60,.28), 0 2px 4px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.26); transition: transform .16s ease, box-shadow .16s ease, filter .16s ease; }
 .host-link:hover { filter: brightness(1.06); transform: translateY(-1px); box-shadow: 0 11px 24px rgba(150,5,60,.32), 0 3px 6px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.3); }
 .host-link:active { filter: brightness(.97); transform: translateY(0) scale(.97); box-shadow: 0 4px 10px rgba(150,5,60,.26), inset 0 1px 0 rgba(255,255,255,.2); }
 .host-link:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+/* Acceso con Google en la cabecera: la G oficial va sobre una ficha blanca
+   redonda para que sus colores no se pierdan sobre la píldora rosa. */
+.login-google-badge { display: grid; flex: none; place-items: center; width: 24px; height: 24px; padding: 4px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.22); }
+.login-google-badge svg { width: 100%; height: 100%; }
+/* Con sesión activa la píldora muestra la cuenta (avatar o inicial + nombre). */
+.account-link { padding-left: 12px; }
+.account-avatar { width: 26px; height: 26px; flex: none; border-radius: 50%; object-fit: cover; box-shadow: 0 0 0 2px rgba(255,255,255,.55); }
+.account-initial { display: grid; flex: none; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgba(255,255,255,.26); font-size: 13px; }
+.account-name { max-width: 13ch; overflow: hidden; text-overflow: ellipsis; }
 .globe-button:hover, .menu-trigger:hover { background: rgba(255,255,255,.22); }
 .globe-button { width: clamp(38px, 3vw, 54px); height: clamp(38px, 3vw, 54px); display: grid; place-items: center; padding: 8px; border: 0; border-radius: 50%; background: transparent; color: #050505; }
 .globe-button svg { width: 100%; height: 100%; }
@@ -509,9 +518,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .services-top { min-height: 0; grid-template-rows: 44px auto; gap: 6px 8px; }
   .brand { gap: 6px; font-size: 19px; }
   .brand-symbol { width: 32px; height: 32px; }
-  /* En el teléfono es la acción principal junto a la hamburguesa: se mantiene
-     como píldora rosa bien visible con zona táctil de 44px. */
-  .host-link { min-height: 44px; padding: 8px 14px; font-size: 13px; }
+  /* En el teléfono el acceso (o la cuenta) es la acción principal junto a la
+     hamburguesa: píldora rosa bien visible con zona táctil de 44px. */
+  .host-link { gap: 7px; min-height: 44px; padding: 8px 14px; font-size: 13px; }
+  .login-google-badge { width: 22px; height: 22px; padding: 4px; }
+  .account-avatar, .account-initial { width: 24px; height: 24px; }
+  .account-name { max-width: 9ch; }
   .globe-button { display: none; }
   .menu-trigger { width: 44px; height: 44px; padding: 8px; }
   .hamburger { gap: 5px; }
@@ -604,6 +616,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .guest-control small { font-size: 11px; }
   .menu-popover { top: 62px; right: max(10px, env(safe-area-inset-right)); left: auto; width: min(300px, calc(100vw - 20px)); }
   .menu-popover button { min-height: 48px; font-size: 14px; }
+
+  /* «Mis favoritos» a lo ancho del teléfono: el WhatsApp queda como botón
+     redondo solo con el icono y las filas conservan zonas táctiles de 44px. */
+  .favorite-row { grid-template-columns: 78px minmax(0, 1fr) auto; gap: 10px; }
+  .favorite-row > img { width: 78px; height: 64px; }
+  .favorite-row .whatsapp-card { min-width: 44px; min-height: 44px; padding: 8px; border-radius: 50%; }
+  .favorite-row .whatsapp-card span { display: none; }
+  .favorite-remove { width: 44px; height: 44px; }
 
   /* --- Resultados y tarjetas --- */
   .list-panel { padding: 28px max(16px, env(safe-area-inset-right)) 58px max(16px, env(safe-area-inset-left)); }
@@ -719,6 +739,28 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 @keyframes sheet-up { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
+
+/* Hoja «Mis favoritos»: lista de guardados con foto, precio y WhatsApp.
+   Cada fila abre el detalle del anuncio; el corazón quita el favorito. */
+.favorites-modal { max-width: 580px; }
+.favorites-list { display: grid; gap: 10px; margin-top: 18px; }
+.favorite-row { display: grid; grid-template-columns: 86px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px; border: 1px solid var(--soft-line); border-radius: 14px; background: #fff; cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease; }
+.favorite-row:hover { border-color: rgba(224,26,91,.45); box-shadow: 0 8px 20px rgba(0,0,0,.09); }
+.favorite-row > img { width: 86px; height: 70px; border-radius: 10px; object-fit: cover; background: var(--soft); }
+.favorite-copy { min-width: 0; display: grid; gap: 3px; }
+.favorite-copy h3 { overflow: hidden; margin: 0; font-size: 14px; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
+.favorite-location { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.favorite-price { margin: 0; font-size: 13px; }
+.favorite-price em { color: var(--muted); font-size: 11px; font-style: normal; }
+.favorite-actions { display: flex; flex-direction: column; align-items: end; gap: 8px; }
+.favorite-remove { width: 40px; height: 40px; display: grid; place-items: center; padding: 0; border: 1px solid var(--soft-line); border-radius: 50%; background: #fff; color: var(--rose); font-size: 17px; line-height: 1; transition: transform .16s ease, box-shadow .16s ease; }
+.favorite-remove:hover { transform: scale(1.06); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+.favorite-remove:disabled { opacity: .55; }
+.favorites-empty { display: grid; justify-items: center; gap: 12px; padding: 38px 18px; text-align: center; }
+.favorites-empty-heart { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: var(--soft); color: var(--rose); font-size: 27px; }
+.favorites-empty p { max-width: 34ch; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.favorites-loading { margin: 16px 0 0; color: var(--muted); font-size: 12px; }
+.favorites-guest-note { display: flex; align-items: center; gap: 10px; margin: 18px 0 0; padding: 11px 13px; border: 1px solid var(--soft-line); border-radius: 13px; background: var(--soft); color: var(--ink); font-size: 12px; line-height: 1.45; }
 
 /* Panel de administración y gestión de anuncios */
 .admin-modal { max-width: 720px; }
