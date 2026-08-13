@@ -175,6 +175,7 @@ type GoogleIdentityClient = {
       text: "continue_with";
       logo_alignment: "left";
       width: number;
+      locale?: string;
     },
   ) => void;
   disableAutoSelect: () => void;
@@ -273,6 +274,17 @@ function SearchIcon() {
 
 function FilterIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M7 14v6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /><circle cx="14" cy="7" r="2" fill="#fff" stroke="currentColor" strokeWidth="2" /><circle cx="7" cy="17" r="2" fill="#fff" stroke="currentColor" strokeWidth="2" /></svg>;
+}
+
+function GoogleGIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 18 18">
+      <path d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62Z" fill="#4285F4" />
+      <path d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18Z" fill="#34A853" />
+      <path d="M3.97 10.72a5.41 5.41 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33Z" fill="#FBBC05" />
+      <path d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59A8.98 8.98 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58Z" fill="#EA4335" />
+    </svg>
+  );
 }
 
 function GlobeIcon() {
@@ -861,6 +873,25 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // El acceso con Google por redirección vuelve a la portada con ?auth=…:
+  // se limpia la URL y se avisa el resultado (la sesión ya viene en la cookie).
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    const authResult = parameters.get("auth");
+    if (!authResult) return;
+    parameters.delete("auth");
+    const query = parameters.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+    const timer = window.setTimeout(() => {
+      if (authResult === "google-ok") flashNotice("Sesión iniciada con Google");
+      if (authResult === "google-error") {
+        setShowLogin(true);
+        flashNotice("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error");
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -1573,6 +1604,7 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
   const [googleStatus, setGoogleStatus] = useState<"loading" | "ready" | "unavailable">("loading");
   const [googleMessage, setGoogleMessage] = useState("");
   const [googleRetry, setGoogleRetry] = useState(0);
+  const [googleFlowEnabled, setGoogleFlowEnabled] = useState(true);
   const googleButtonRef = useRef<HTMLDivElement>(null);
   const authenticatedRef = useRef(onAuthenticated);
 
@@ -1590,8 +1622,10 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
         const response = await fetch("/api/auth/config");
         const config = (await response.json()) as { googleEnabled?: boolean; googleClientId?: string };
         if (!response.ok || !config.googleEnabled || !config.googleClientId) {
-          throw new Error("El acceso con Google está terminando de configurarse.");
+          if (!cancelled) setGoogleFlowEnabled(false);
+          throw new Error("El acceso con Google está terminando de configurarse. Vuelve a intentarlo en unos minutos.");
         }
+        if (!cancelled) setGoogleFlowEnabled(true);
         await loadGoogleIdentityScript();
         if (cancelled || !googleButtonRef.current || !window.google?.accounts.id) return;
         const authenticateWithGoogle = async (credential: string) => {
@@ -1632,19 +1666,22 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
           shape: "rectangular",
           text: "continue_with",
           logo_alignment: "left",
-          width: Math.max(200, Math.min(344, Math.floor(googleButtonRef.current.getBoundingClientRect().width))),
+          // Botón oficial a todo el ancho del modal (Google admite hasta 400 px).
+          width: Math.max(200, Math.min(400, Math.floor(googleButtonRef.current.getBoundingClientRect().width))),
+          locale: "es",
         });
         if (cancelled) return;
         setGoogleStatus("ready");
         // Si Google rechaza el origen (falta autorizar el dominio en Google
-        // Cloud Console) el iframe del botón nunca aparece: avisamos en claro
-        // en lugar de dejar un espacio vacío.
+        // Cloud Console) o el navegador bloquea el iframe del botón, este
+        // nunca aparece: avisamos en claro y dejamos activo el acceso por
+        // redirección de "Continuar con Google".
         renderCheckTimeout = window.setTimeout(() => {
           if (cancelled) return;
           if (!googleButtonRef.current?.querySelector("iframe")) {
             setGoogleStatus("unavailable");
             setGoogleMessage(
-              "Google no aceptó este dominio todavía. Escríbenos a " + SUPPORT_EMAIL + " o usa tu correo y contraseña más abajo.",
+              "El botón oficial de Google no cargó en este navegador. Toca «Continuar con Google» para entrar desde la página segura de Google, o vuelve a intentarlo.",
             );
           }
         }, 3000);
@@ -1716,26 +1753,40 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
         </div>
       ) : (
         <>
-          <h2>Inicia sesión para continuar</h2>
-          <p>Accede con Google para guardar favoritos, publicar anuncios y gestionar tus consultas de forma segura.</p>
+          <h2>Inicia sesión con Google</h2>
+          <p>Usa tu cuenta de Google para guardar favoritos, publicar anuncios y gestionar tus consultas de forma segura.</p>
           <div className={`google-auth-panel ${isSaving ? "busy" : ""}`}>
-            <div className="google-button-shell">
-              <div ref={googleButtonRef} className="google-button-target" aria-label="Continuar con Google" />
-              {googleStatus === "loading" && <span className="google-loading">Preparando acceso con Google…</span>}
-              {googleStatus === "unavailable" && <span className="google-unavailable">{googleMessage}</span>}
-            </div>
-            {googleStatus === "unavailable" && (
+            <div className="google-cta">
+              {/* Botón propio a todo el ancho: si el iframe oficial de Google
+                  se muestra encima, el toque llega a Google Identity Services;
+                  si el iframe no carga, este botón inicia sesión con Google
+                  mediante la redirección OAuth (/api/auth/google/start). */}
               <button
                 type="button"
-                className="google-retry"
-                onClick={() => {
-                  setGoogleStatus("loading");
-                  setGoogleMessage("");
-                  setGoogleRetry((attempt) => attempt + 1);
-                }}
+                className="google-cta-button"
+                disabled={!googleFlowEnabled || isSaving}
+                onClick={() => window.location.assign("/api/auth/google/start")}
               >
-                Reintentar acceso con Google
+                <GoogleGIcon />
+                <span>Continuar con Google</span>
               </button>
+              <div ref={googleButtonRef} className="google-button-target" aria-label="Continuar con Google" />
+            </div>
+            {googleStatus === "unavailable" && (
+              <>
+                <span className="google-unavailable" role="alert">{googleMessage}</span>
+                <button
+                  type="button"
+                  className="google-retry"
+                  onClick={() => {
+                    setGoogleStatus("loading");
+                    setGoogleMessage("");
+                    setGoogleRetry((attempt) => attempt + 1);
+                  }}
+                >
+                  Reintentar el botón de Google
+                </button>
+              </>
             )}
             <small>Google confirma tu identidad; {BRAND} crea una sesión segura en este dispositivo.</small>
           </div>
