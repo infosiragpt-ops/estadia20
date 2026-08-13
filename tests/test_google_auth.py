@@ -28,7 +28,9 @@ class GoogleAuthenticationTests(unittest.TestCase):
         roomies_server.PUBLIC_DIR = Path(cls.temporary_directory.name) / "public"
         roomies_server.GOOGLE_VENDOR_DIR = roomies_server.PUBLIC_DIR / ".server_vendor"
         roomies_server.GOOGLE_CLIENT_ID = "test-client.apps.googleusercontent.com"
-        roomies_server.OWNER_EMAIL = "carrerajorge874@gmail.com"
+        roomies_server.OWNER_EMAILS = frozenset(
+            {"carrerajorge874@gmail.com", "infosiragpt@gmail.com"}
+        )
         cls.original_oauth_hosts = roomies_server.OAUTH_REDIRECT_HOSTS
         roomies_server.OAUTH_REDIRECT_HOSTS = frozenset({"127.0.0.1"})
         roomies_server.initialize_database()
@@ -145,6 +147,27 @@ class GoogleAuthenticationTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM users WHERE google_sub = ?", ("google-owner-123",)
             ).fetchone()[0]
         self.assertEqual(account_count, 1)
+
+    def test_second_owner_email_also_gets_admin_role(self) -> None:
+        roomies_server.verify_google_credential = lambda credential: {
+            "sub": "google-owner-456",
+            "email": "infosiragpt@gmail.com",
+            "email_verified": True,
+            "name": "Info Sira",
+            "picture": "",
+        }
+        status, payload, headers = self.request(
+            "POST", "/api/auth/google", {"credential": "signed-google-token"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["user"]["email"], "infosiragpt@gmail.com")
+        self.assertEqual(payload["user"]["role"], "admin")
+        self.assertEqual(payload["user"]["authProvider"], "google")
+
+        session_cookie = headers["Set-Cookie"].split(";", 1)[0]
+        me_status, me_payload, _ = self.request("GET", "/api/auth/me", cookie=session_cookie)
+        self.assertEqual(me_status, 200)
+        self.assertEqual(me_payload["user"]["role"], "admin")
 
     def test_google_login_records_last_login_and_activity(self) -> None:
         roomies_server.verify_google_credential = lambda credential: {

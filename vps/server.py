@@ -42,13 +42,22 @@ GOOGLE_CLIENT_ID = os.environ.get(
     "GOOGLE_CLIENT_ID",
     "1076572757032-u0jp02mfhohujaao9qu64jlmja0asn2c.apps.googleusercontent.com",
 ).strip()
-OWNER_EMAIL = os.environ.get(
-    "ESTADIA20_OWNER_EMAIL",
-    os.environ.get(
-        "LLAVES365_OWNER_EMAIL",
-        os.environ.get("ROOMIES20_OWNER_EMAIL", "carrerajorge874@gmail.com"),
-    ),
-).strip().lower()
+# Correos dueños del sitio (separados por comas): todos reciben el rol admin
+# al iniciar sesión con Google y ninguno puede registrarse con contraseña.
+OWNER_EMAILS = frozenset(
+    email.strip().lower()
+    for email in os.environ.get(
+        "ESTADIA20_OWNER_EMAIL",
+        os.environ.get(
+            "LLAVES365_OWNER_EMAIL",
+            os.environ.get(
+                "ROOMIES20_OWNER_EMAIL",
+                "carrerajorge874@gmail.com,infosiragpt@gmail.com",
+            ),
+        ),
+    ).split(",")
+    if email.strip()
+)
 # Los anuncios de demostración solo se insertan si se pide explícitamente;
 # así el administrador puede eliminarlos sin que reaparezcan al reiniciar.
 SEED_DEMO_DATA = os.environ.get("ESTADIA20_SEED_DEMO", "").strip().lower() in {
@@ -421,18 +430,27 @@ def initialize_database() -> None:
               WHERE google_sub IS NOT NULL
             """
         )
-        # El rol admin pertenece únicamente al correo dueño configurado; corrige
-        # cuentas que quedaron con un rol desactualizado tras cambiar de dueño.
-        database.execute(
-            "UPDATE users SET role = 'user' WHERE role = 'admin' AND email <> ?",
-            (OWNER_EMAIL,),
-        )
-        # Solo se promueve la cuenta verificada por Google: una cuenta creada
-        # con contraseña y el mismo correo no debe recibir el rol admin.
-        database.execute(
-            "UPDATE users SET role = 'admin' WHERE email = ? AND auth_provider = 'google'",
-            (OWNER_EMAIL,),
-        )
+        # El rol admin pertenece únicamente a los correos dueños configurados;
+        # corrige cuentas que quedaron con un rol desactualizado tras cambiar
+        # de dueño.
+        if OWNER_EMAILS:
+            owner_placeholders = ", ".join("?" for _ in OWNER_EMAILS)
+            owner_values = tuple(sorted(OWNER_EMAILS))
+            database.execute(
+                "UPDATE users SET role = 'user' "
+                f"WHERE role = 'admin' AND email NOT IN ({owner_placeholders})",
+                owner_values,
+            )
+            # Solo se promueven las cuentas verificadas por Google: una cuenta
+            # creada con contraseña y el mismo correo no debe recibir el rol
+            # admin.
+            database.execute(
+                "UPDATE users SET role = 'admin' "
+                f"WHERE email IN ({owner_placeholders}) AND auth_provider = 'google'",
+                owner_values,
+            )
+        else:
+            database.execute("UPDATE users SET role = 'user' WHERE role = 'admin'")
         database.executescript(
             """
             DELETE FROM favorites
@@ -1810,9 +1828,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 HTTPStatus.BAD_REQUEST,
             )
             return
-        if email == OWNER_EMAIL:
-            # La cuenta administradora solo se crea mediante Google, donde el
-            # correo llega verificado; así nadie puede reservarla con contraseña.
+        if email in OWNER_EMAILS:
+            # Las cuentas administradoras solo se crean mediante Google, donde
+            # el correo llega verificado; así nadie puede reservarlas con
+            # contraseña.
             self.send_json(
                 {"error": "Ese correo se administra con el acceso de Google."},
                 HTTPStatus.CONFLICT,
@@ -1934,7 +1953,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 HTTPStatus.UNAUTHORIZED,
             )
 
-        role = "admin" if email == OWNER_EMAIL else "user"
+        role = "admin" if email in OWNER_EMAILS else "user"
         try:
             with connect() as database:
                 by_google = database.execute(
