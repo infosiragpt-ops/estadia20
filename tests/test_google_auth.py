@@ -5,7 +5,9 @@ import json
 import tempfile
 import threading
 import unittest
+from http.cookies import SimpleCookie
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from vps import server as roomies_server
 
@@ -27,6 +29,8 @@ class GoogleAuthenticationTests(unittest.TestCase):
         roomies_server.GOOGLE_VENDOR_DIR = roomies_server.PUBLIC_DIR / ".server_vendor"
         roomies_server.GOOGLE_CLIENT_ID = "test-client.apps.googleusercontent.com"
         roomies_server.OWNER_EMAIL = "carrerajorge874@gmail.com"
+        cls.original_oauth_hosts = roomies_server.OAUTH_REDIRECT_HOSTS
+        roomies_server.OAUTH_REDIRECT_HOSTS = frozenset({"127.0.0.1"})
         roomies_server.initialize_database()
 
         cls.original_verifier = roomies_server.verify_google_credential
@@ -38,6 +42,7 @@ class GoogleAuthenticationTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         roomies_server.verify_google_credential = cls.original_verifier
+        roomies_server.OAUTH_REDIRECT_HOSTS = cls.original_oauth_hosts
         cls.http_server.shutdown()
         cls.http_server.server_close()
         cls.server_thread.join(timeout=3)
@@ -55,6 +60,59 @@ class GoogleAuthenticationTests(unittest.TestCase):
         response_headers = dict(response.getheaders())
         connection.close()
         return response.status, response_body, response_headers
+
+    def request_raw(
+        self,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ):
+        """Solicitud sin JSON: devuelve estado, encabezados (lista) y cuerpo."""
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=5)
+        connection.request(method, path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        raw_body = response.read()
+        header_pairs = response.getheaders()
+        connection.close()
+        return response.status, header_pairs, raw_body
+
+    @staticmethod
+    def set_cookies(header_pairs) -> dict[str, str]:
+        cookies: dict[str, str] = {}
+        for name, value in header_pairs:
+            if name.lower() != "set-cookie":
+                continue
+            parsed = SimpleCookie(value)
+            for cookie_name, morsel in parsed.items():
+                cookies[cookie_name] = morsel.value
+        return cookies
+
+    def start_oauth_flow(self) -> tuple[str, str, str]:
+        """Inicia /api/auth/google/start y devuelve (state, nonce, cookie)."""
+        status, header_pairs, _ = self.request_raw("GET", "/api/auth/google/start")
+        self.assertEqual(status, 302)
+        location = dict(header_pairs)["Location"]
+        self.assertTrue(
+            location.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+        )
+        parameters = parse_qs(urlparse(location).query)
+        cookie_value = self.set_cookies(header_pairs)["estadia20_oauth"]
+        state, nonce = cookie_value.split(".", 1)
+        self.assertEqual(parameters["state"], [state])
+        self.assertEqual(parameters["nonce"], [nonce])
+        return state, nonce, f"estadia20_oauth={cookie_value}"
+
+    def post_oauth_callback(self, fields: dict[str, str], cookie: str = ""):
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        if cookie:
+            headers["Cookie"] = cookie
+        return self.request_raw(
+            "POST",
+            "/api/auth/google/callback",
+            body=urlencode(fields).encode(),
+            headers=headers,
+        )
 
     def test_google_owner_gets_admin_session_and_is_reused(self) -> None:
         roomies_server.verify_google_credential = lambda credential: {
@@ -129,6 +187,111 @@ class GoogleAuthenticationTests(unittest.TestCase):
         )
         self.assertEqual(invalid_status, 401)
         self.assertIn("validar", invalid_payload["error"])
+
+    def test_google_start_redirects_with_expected_parameters(self) -> None:
+        status, header_pairs, _ = self.request_raw("GET", "/api/auth/google/start")
+        self.assertEqual(status, 302)
+        location = dict(header_pairs)["Location"]
+        parameters = parse_qs(urlparse(location).query)
+        self.assertEqual(parameters["client_id"], [roomies_server.GOOGLE_CLIENT_ID])
+        self.assertEqual(
+            parameters["redirect_uri"],
+            ["https://127.0.0.1/api/auth/google/callback"],
+        )
+        self.assertEqual(parameters["response_type"], ["id_token"])
+        self.assertEqual(parameters["response_mode"], ["form_post"])
+        self.assertEqual(parameters["scope"], ["openid email profile"])
+        self.assertTrue(parameters["state"][0])
+        self.assertTrue(parameters["nonce"][0])
+        oauth_cookie = self.set_cookies(header_pairs)["estadia20_oauth"]
+        self.assertRegex(oauth_cookie, r"^[A-Za-z0-9_-]{16,64}\.[A-Za-z0-9_-]{16,64}$")
+
+    def test_google_start_ignores_unknown_hosts_for_redirect_uri(self) -> None:
+        status, header_pairs, _ = self.request_raw(
+            "GET", "/api/auth/google/start", headers={"Host": "atacante.example"}
+        )
+        self.assertEqual(status, 302)
+        parameters = parse_qs(urlparse(dict(header_pairs)["Location"]).query)
+        self.assertEqual(
+            parameters["redirect_uri"],
+            [f"https://{roomies_server.OAUTH_DEFAULT_HOST}/api/auth/google/callback"],
+        )
+
+    def test_google_callback_grants_admin_session_and_redirects_home(self) -> None:
+        state, nonce, cookie = self.start_oauth_flow()
+        roomies_server.verify_google_credential = lambda credential: {
+            "sub": "google-owner-callback",
+            "email": "carrerajorge874@gmail.com",
+            "email_verified": True,
+            "name": "Jorge Carrera",
+            "picture": "https://example.com/avatar.jpg",
+            "nonce": nonce,
+        }
+        status, header_pairs, _ = self.post_oauth_callback(
+            {"id_token": "signed-google-token", "state": state}, cookie=cookie
+        )
+        self.assertEqual(status, 303)
+        self.assertEqual(dict(header_pairs)["Location"], "/?auth=google-ok")
+        cookies = self.set_cookies(header_pairs)
+        session_token = cookies.get("estadia20_session", "")
+        self.assertTrue(session_token)
+        self.assertEqual(cookies.get("estadia20_oauth"), "")
+
+        me_status, me_payload, _ = self.request(
+            "GET", "/api/auth/me", cookie=f"estadia20_session={session_token}"
+        )
+        self.assertEqual(me_status, 200)
+        self.assertEqual(me_payload["user"]["email"], "carrerajorge874@gmail.com")
+        self.assertEqual(me_payload["user"]["role"], "admin")
+        self.assertEqual(me_payload["user"]["authProvider"], "google")
+
+    def test_google_callback_rejects_state_mismatch(self) -> None:
+        _, nonce, cookie = self.start_oauth_flow()
+        roomies_server.verify_google_credential = lambda credential: {
+            "sub": "google-callback-state",
+            "email": "estado@example.com",
+            "email_verified": True,
+            "name": "Estado Incorrecto",
+            "picture": "",
+            "nonce": nonce,
+        }
+        status, header_pairs, _ = self.post_oauth_callback(
+            {"id_token": "signed-google-token", "state": "estado-falsificado"},
+            cookie=cookie,
+        )
+        self.assertEqual(status, 303)
+        self.assertEqual(dict(header_pairs)["Location"], "/?auth=google-error")
+        self.assertNotIn("estadia20_session", self.set_cookies(header_pairs))
+
+    def test_google_callback_rejects_nonce_mismatch_and_missing_cookie(self) -> None:
+        state, _, cookie = self.start_oauth_flow()
+        roomies_server.verify_google_credential = lambda credential: {
+            "sub": "google-callback-nonce",
+            "email": "nonce@example.com",
+            "email_verified": True,
+            "name": "Nonce Incorrecto",
+            "picture": "",
+            "nonce": "otro-nonce",
+        }
+        status, header_pairs, _ = self.post_oauth_callback(
+            {"id_token": "signed-google-token", "state": state}, cookie=cookie
+        )
+        self.assertEqual(status, 303)
+        self.assertEqual(dict(header_pairs)["Location"], "/?auth=google-error")
+        self.assertNotIn("estadia20_session", self.set_cookies(header_pairs))
+
+        no_cookie_status, no_cookie_headers, _ = self.post_oauth_callback(
+            {"id_token": "signed-google-token", "state": state}
+        )
+        self.assertEqual(no_cookie_status, 303)
+        self.assertEqual(dict(no_cookie_headers)["Location"], "/?auth=google-error")
+        self.assertNotIn("estadia20_session", self.set_cookies(no_cookie_headers))
+
+    def test_google_callback_get_redirects_home_without_session(self) -> None:
+        status, header_pairs, _ = self.request_raw("GET", "/api/auth/google/callback")
+        self.assertEqual(status, 302)
+        self.assertEqual(dict(header_pairs)["Location"], "/")
+        self.assertNotIn("estadia20_session", self.set_cookies(header_pairs))
 
 
 if __name__ == "__main__":

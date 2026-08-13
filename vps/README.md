@@ -20,14 +20,43 @@ python3 -m py_compile vps/server.py
 
 La compilación se guarda en `vps/public`.
 
-El cliente OAuth web de Google debe autorizar `https://estadia20.com` y
-`https://www.estadia20.com` (agrega también `https://llaves365.com` y
-`https://www.llaves365.com` si ese dominio sigue activo). El identificador
-público se configura mediante `GOOGLE_CLIENT_ID`; la cuenta administradora se
-controla con `ESTADIA20_OWNER_EMAIL` (con compatibilidad para
-`LLAVES365_OWNER_EMAIL` y `ROOMIES20_OWNER_EMAIL`) y por defecto es
-`carrerajorge874@gmail.com`. Al arrancar, el servidor sincroniza el rol
-`admin` con ese correo y lo retira de cualquier otra cuenta.
+## Configuración del cliente OAuth de Google
+
+Se usa el cliente OAuth web existente (`GOOGLE_CLIENT_ID`); no hay que crear
+uno nuevo ni configurar un secreto. En Google Cloud Console → APIs y
+servicios → Credenciales → el cliente OAuth web, marca **los cuatro orígenes
+y las cuatro URI de redirección**:
+
+**Authorized JavaScript origins** (para el botón oficial de Google Identity
+Services):
+
+- `https://llaves365.com`
+- `https://www.llaves365.com`
+- `https://estadia20.com`
+- `https://www.estadia20.com`
+
+**Authorized redirect URIs** (para el acceso por redirección cuando el iframe
+de GIS no carga, p. ej. Safari móvil o FedCM bloqueado):
+
+- `https://llaves365.com/api/auth/google/callback`
+- `https://www.llaves365.com/api/auth/google/callback`
+- `https://estadia20.com/api/auth/google/callback`
+- `https://www.estadia20.com/api/auth/google/callback`
+
+El flujo de redirección lo inicia `GET /api/auth/google/start`
+(`response_type=id_token`, `response_mode=form_post`, con `state` y `nonce`
+verificados en el servidor); Google devuelve el `id_token` con un POST a
+`/api/auth/google/callback`, que lo valida igual que `POST /api/auth/google`,
+crea la cookie de sesión y vuelve a la portada. Los dominios aceptados para
+el retorno se controlan con `ESTADIA20_OAUTH_HOSTS` (por defecto los cuatro
+dominios anteriores).
+
+La cuenta administradora se controla con `ESTADIA20_OWNER_EMAIL` (con
+compatibilidad para `LLAVES365_OWNER_EMAIL` y `ROOMIES20_OWNER_EMAIL`) y por
+defecto es `carrerajorge874@gmail.com`. Solo se promueve al iniciar sesión
+con Google (correo verificado); ese correo no puede registrarse con
+contraseña. Al arrancar, el servidor sincroniza el rol `admin` con ese correo
+y lo retira de cualquier otra cuenta.
 
 ## Rutas de producción
 

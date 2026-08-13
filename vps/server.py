@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import error as urllib_error
 from urllib import request as urllib_request
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 
 DATA_DIR = Path(os.environ.get("ESTADIA20_DATA_DIR", "/var/lib/estadia20"))
@@ -57,6 +57,22 @@ SEED_DEMO_DATA = os.environ.get("ESTADIA20_SEED_DEMO", "").strip().lower() in {
 VISITOR_COOKIE = "depitass_visitor"
 SESSION_COOKIE = "estadia20_session"
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
+# Flujo alternativo de Google por redirección (OAuth 2.0 con id_token) para
+# navegadores donde el iframe de Google Identity Services no carga (Safari
+# móvil, FedCM bloqueado, etc.). El dominio de retorno debe estar autorizado
+# en Google Cloud Console como "Authorized redirect URI".
+OAUTH_STATE_COOKIE = "estadia20_oauth"
+OAUTH_STATE_TTL_SECONDS = 10 * 60
+OAUTH_CALLBACK_PATH = "/api/auth/google/callback"
+OAUTH_REDIRECT_HOSTS = frozenset(
+    host.strip().lower()
+    for host in os.environ.get(
+        "ESTADIA20_OAUTH_HOSTS",
+        "llaves365.com,www.llaves365.com,estadia20.com,www.estadia20.com",
+    ).split(",")
+    if host.strip()
+)
+OAUTH_DEFAULT_HOST = "llaves365.com"
 PASSWORD_ITERATIONS = 310_000
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 CATEGORIES = {"Roomies", "Depas", "Airbnb", "Transporte"}
@@ -85,6 +101,7 @@ RATE_LIMIT_RULES = {
     ("POST", "/api/auth/register"): (8, 300),
     ("POST", "/api/auth/login"): (12, 300),
     ("POST", "/api/auth/google"): (20, 300),
+    ("POST", OAUTH_CALLBACK_PATH): (20, 300),
     ("POST", "/api/listings"): (12, 3600),
     ("POST", "/api/uploads"): (12, 3600),
     ("POST", "/api/favorites"): (60, 60),
@@ -636,6 +653,14 @@ def verify_google_credential(credential: str) -> dict[str, object]:
     return claims
 
 
+class GoogleAccountError(Exception):
+    """Fallo al crear o vincular la cuenta a partir de un id_token válido."""
+
+    def __init__(self, message: str, status: HTTPStatus):
+        super().__init__(message)
+        self.status = status
+
+
 def listing_dict(row: sqlite3.Row) -> dict[str, object]:
     try:
         gallery = json.loads(row["gallery"])
@@ -1176,6 +1201,14 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if parsed.path == "/api/auth/google/start":
+            self.google_oauth_start()
+            return
+        if parsed.path == OAUTH_CALLBACK_PATH:
+            # Google entrega el id_token con POST; un GET aquí es una recarga
+            # o una cancelación, así que se vuelve al inicio sin sesión.
+            self.send_redirect("/", HTTPStatus.FOUND, clear_oauth_state=True)
+            return
         if parsed.path == "/api/listings":
             try:
                 rows, metadata = listings_query(parse_qs(parsed.query, keep_blank_values=True))
@@ -1548,6 +1581,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 self.login_user()
             elif parsed.path == "/api/auth/google":
                 self.google_login()
+            elif parsed.path == OAUTH_CALLBACK_PATH:
+                self.google_oauth_callback()
             elif parsed.path == "/api/auth/logout":
                 self.logout_user()
             elif parsed.path == "/api/listings":
@@ -1868,6 +1903,20 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             )
             return
 
+        try:
+            user, token = self.establish_google_session(claims)
+        except GoogleAccountError as account_error:
+            self.send_json({"error": str(account_error)}, account_error.status)
+            return
+
+        self.send_json({"user": user_dict(user)}, session_token=token)
+
+    def establish_google_session(
+        self, claims: dict[str, object]
+    ) -> tuple[sqlite3.Row, str]:
+        """Crea o vincula la cuenta a partir de las claims verificadas de
+        Google y devuelve (usuario, token de sesión). Lo comparten el flujo
+        del botón GIS (POST /api/auth/google) y el de redirección OAuth."""
         google_sub = str(claims.get("sub", "")).strip()
         email = str(claims.get("email", "")).strip().lower()
         name = str(claims.get("name", "")).strip()[:80] or email.split("@", 1)[0]
@@ -1880,11 +1929,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             or len(email) > 160
             or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)
         ):
-            self.send_json(
-                {"error": "La cuenta de Google no contiene un correo válido."},
+            raise GoogleAccountError(
+                "La cuenta de Google no contiene un correo válido.",
                 HTTPStatus.UNAUTHORIZED,
             )
-            return
 
         role = "admin" if email == OWNER_EMAIL else "user"
         try:
@@ -1900,11 +1948,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     and by_email is not None
                     and by_google["id"] != by_email["id"]
                 ):
-                    self.send_json(
-                        {"error": "Ese correo ya pertenece a otra cuenta."},
+                    raise GoogleAccountError(
+                        "Ese correo ya pertenece a otra cuenta.",
                         HTTPStatus.CONFLICT,
                     )
-                    return
                 existing = by_google or by_email
                 if existing is None:
                     cursor = database.execute(
@@ -1940,14 +1987,128 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 ).fetchone()
                 record_login(database, user_id, "google")
                 token = self.create_session(database, user_id)
-        except sqlite3.IntegrityError:
-            self.send_json(
-                {"error": "No pudimos vincular esa cuenta de Google."},
+        except sqlite3.IntegrityError as error:
+            raise GoogleAccountError(
+                "No pudimos vincular esa cuenta de Google.",
                 HTTPStatus.CONFLICT,
-            )
-            return
+            ) from error
+        return user, token
 
-        self.send_json({"user": user_dict(user)}, session_token=token)
+    def send_redirect(
+        self,
+        location: str,
+        status: HTTPStatus = HTTPStatus.SEE_OTHER,
+        oauth_state_value: str | None = None,
+        clear_oauth_state: bool = False,
+        session_token: str | None = None,
+    ) -> None:
+        self.send_response(status)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        if oauth_state_value:
+            # SameSite=None: Google entrega el id_token con un POST de otro
+            # sitio (accounts.google.com) y la cookie debe viajar con él.
+            self.send_header(
+                "Set-Cookie",
+                f"{OAUTH_STATE_COOKIE}={oauth_state_value}; Path=/; "
+                f"Max-Age={OAUTH_STATE_TTL_SECONDS}; HttpOnly; SameSite=None; Secure",
+            )
+        if clear_oauth_state:
+            self.send_header(
+                "Set-Cookie",
+                f"{OAUTH_STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; "
+                "SameSite=None; Secure",
+            )
+        if session_token:
+            self.send_header(
+                "Set-Cookie",
+                f"{SESSION_COOKIE}={session_token}; Path=/; Max-Age={SESSION_TTL_SECONDS}; "
+                "HttpOnly; SameSite=Lax; Secure",
+            )
+        self.end_headers()
+
+    def oauth_redirect_uri(self) -> str:
+        host = (self.headers.get("Host") or "").split(":", 1)[0].strip().lower()
+        if host not in OAUTH_REDIRECT_HOSTS:
+            host = OAUTH_DEFAULT_HOST
+        return f"https://{host}{OAUTH_CALLBACK_PATH}"
+
+    def google_oauth_start(self) -> None:
+        """Inicia el acceso con Google por redirección completa (OAuth 2.0,
+        response_type=id_token). Es el respaldo cuando el iframe de GIS no
+        carga; Google devuelve el id_token con un form POST al callback."""
+        if not GOOGLE_CLIENT_ID:
+            self.send_redirect("/?auth=google-error", HTTPStatus.FOUND)
+            return
+        state = secrets.token_urlsafe(24)
+        nonce = secrets.token_urlsafe(24)
+        parameters = urlencode(
+            {
+                "client_id": GOOGLE_CLIENT_ID,
+                "redirect_uri": self.oauth_redirect_uri(),
+                "response_type": "id_token",
+                "response_mode": "form_post",
+                "scope": "openid email profile",
+                "state": state,
+                "nonce": nonce,
+                "prompt": "select_account",
+            }
+        )
+        self.send_redirect(
+            f"https://accounts.google.com/o/oauth2/v2/auth?{parameters}",
+            HTTPStatus.FOUND,
+            oauth_state_value=f"{state}.{nonce}",
+        )
+
+    def google_oauth_callback(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length <= 0 or length > 64 * 1024:
+                raise ValueError("Cuerpo inválido")
+            fields = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+            credential = (
+                fields.get("id_token", [""])[0] or fields.get("credential", [""])[0]
+            ).strip()
+            state = fields.get("state", [""])[0].strip()
+            if fields.get("error", [""])[0] or not credential or len(credential) > 12_000:
+                raise ValueError("Google no entregó una credencial válida")
+
+            cookies = SimpleCookie(self.headers.get("Cookie", ""))
+            oauth_cookie = cookies.get(OAUTH_STATE_COOKIE)
+            stored = re.fullmatch(
+                r"([A-Za-z0-9_-]{16,64})\.([A-Za-z0-9_-]{16,64})",
+                oauth_cookie.value if oauth_cookie else "",
+            )
+            if (
+                stored is None
+                or not state
+                or not hmac.compare_digest(state, stored.group(1))
+            ):
+                raise ValueError("El estado de la solicitud no coincide")
+
+            claims = verify_google_credential(credential)
+            nonce = str(claims.get("nonce", ""))
+            if not nonce or not hmac.compare_digest(nonce, stored.group(2)):
+                raise ValueError("El nonce de la solicitud no coincide")
+
+            user, token = self.establish_google_session(claims)
+        except (ValueError, GoogleAccountError, RuntimeError) as error:
+            print(
+                json.dumps(
+                    {
+                        "requestId": self.request_id,
+                        "googleCallbackError": repr(error),
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            self.send_redirect("/?auth=google-error", clear_oauth_state=True)
+            return
+        self.send_redirect(
+            "/?auth=google-ok", clear_oauth_state=True, session_token=token
+        )
 
     def logout_user(self) -> None:
         cookies = SimpleCookie(self.headers.get("Cookie", ""))

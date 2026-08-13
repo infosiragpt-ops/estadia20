@@ -327,12 +327,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .account-summary > span b { padding: 4px 6px; border-radius: 6px; background: #e7f5ec; color: #167348; font-size: 8px; letter-spacing: .04em; text-transform: uppercase; }
 .google-auth-panel { width: 100%; margin-top: 22px; }
 .google-auth-panel.busy { pointer-events: none; opacity: .62; }
-.google-button-shell { width: 100%; min-height: 44px; position: relative; display: grid; place-items: center; }
-.google-button-target { width: 100%; min-height: 44px; display: flex; justify-content: center; }
-.google-loading, .google-unavailable { width: 100%; min-height: 44px; display: grid; place-items: center; padding: 9px 14px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: #5f6368; font-size: 11px; font-weight: 600; }
-.google-loading { position: absolute; inset: 0; overflow: hidden; }
-.google-loading::after { width: 42%; position: absolute; inset: 0 auto 0 -42%; content: ""; background: linear-gradient(90deg, transparent, rgba(0,0,0,.045), transparent); animation: google-loading 1.35s ease-in-out infinite; }
-.google-unavailable { border-style: dashed; color: var(--muted); line-height: 1.35; }
+.google-cta { width: 100%; height: 48px; position: relative; }
+.google-cta-button { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px 14px; border: 1px solid #dadce0; border-radius: 10px; background: #fff; color: #3c4043; font-size: 13px; font-weight: 700; box-shadow: 0 1px 3px rgba(60,64,67,.12); }
+.google-cta-button:hover:not(:disabled) { border-color: #c6dafc; background: #f8faff; }
+.google-cta-button:disabled { cursor: wait; opacity: .6; }
+.google-cta-button svg { width: 19px; height: 19px; flex: none; }
+/* El botón oficial de Google se renderiza encima del botón propio, casi
+   transparente pero interactivo: el toque llega al iframe real de Google.
+   Si el iframe no carga, el toque pasa al botón propio (redirección OAuth). */
+.google-button-target { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: .001; pointer-events: none; }
+.google-button-target * { pointer-events: auto; }
+.google-unavailable { width: 100%; min-height: 44px; display: grid; place-items: center; margin-top: 10px; padding: 9px 14px; border: 1px dashed var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-size: 11px; font-weight: 600; line-height: 1.35; }
 .google-auth-panel > small { display: block; max-width: 320px; margin: 10px auto 0; color: #888; font-size: 9px; line-height: 1.45; }
 .auth-error { width: 100%; padding: 10px 12px; border-radius: 9px; background: #fff1f3; text-align: left; }
 .auth-divider { width: 100%; display: flex; align-items: center; gap: 10px; margin: 18px 0 12px; color: #999; font-size: 9px; }
@@ -343,7 +348,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .google-retry:hover { border-color: var(--ink); background: #fafafa; }
 .password-access { width: 100%; }
 .password-access .auth-switch { margin-top: 14px; }
-@keyframes google-loading { to { left: 100%; } }
 .primary-button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 44px; margin-top: 20px; padding: 12px 17px; border: 0; border-radius: 9px; background: linear-gradient(90deg, var(--rose-dark), var(--rose)); color: #fff; text-decoration: none; font-size: 11px; font-weight: 700; }.primary-button.wide { width: 100%; }.primary-button:disabled { cursor: wait; opacity: .65; }
 .publish-modal { max-width: 760px; }.publish-modal form > label, .form-grid label { display: grid; gap: 7px; margin-top: 13px; color: var(--ink); font-size: 11px; font-weight: 700; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 13px; }.publish-modal textarea { resize: vertical; }.form-error { margin: 13px 0 0; color: var(--rose-dark); font-size: 11px; }
 .publish-depa-fields { margin: 20px 0 4px; padding: 8px 16px 16px; border: 1px solid var(--soft-line); border-radius: 14px; background: #fafafa; }
