@@ -239,6 +239,113 @@ function imageUrl(source: string, width: number) {
   return `${source}${source.includes("?") ? "&" : "?"}auto=format&fit=crop&w=${width}&q=90`;
 }
 
+// Galería deslizable estilo iOS Photos: usa scroll horizontal nativo con
+// scroll-snap, así la foto sigue al dedo y encaja en la más cercana al soltar
+// sin secuestrar el scroll vertical de la página. En escritorio también se
+// puede arrastrar con el mouse; un arrastre no dispara el clic de la tarjeta.
+function SwipeGallery({ index, count, onIndexChange, className = "", label, children }: {
+  index: number;
+  count: number;
+  onIndexChange: (index: number) => void;
+  className?: string;
+  label?: string;
+  children: React.ReactNode;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const reportedIndex = useRef(index);
+  const dragRef = useRef<{ pointerId: number; startX: number; startScroll: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const didMount = useRef(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    reportedIndex.current = index;
+    const width = Math.max(1, track.clientWidth);
+    if (Math.round(track.scrollLeft / width) !== index) {
+      track.scrollTo({ left: index * width, behavior: didMount.current ? "smooth" : "auto" });
+    }
+    didMount.current = true;
+  }, [index]);
+
+  function nearestIndex(track: HTMLDivElement) {
+    const width = Math.max(1, track.clientWidth);
+    return Math.max(0, Math.min(count - 1, Math.round(track.scrollLeft / width)));
+  }
+
+  function reportIndex(next: number) {
+    if (next === reportedIndex.current) return;
+    reportedIndex.current = next;
+    onIndexChange(next);
+  }
+
+  function handleScroll() {
+    const track = trackRef.current;
+    if (!track || dragRef.current) return;
+    reportIndex(nearestIndex(track));
+  }
+
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== "mouse" || event.button !== 0 || count < 2) return;
+    const track = trackRef.current;
+    if (!track) return;
+    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScroll: track.scrollLeft, moved: false };
+    track.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    const track = trackRef.current;
+    if (!drag || !track || event.pointerId !== drag.pointerId) return;
+    const delta = event.clientX - drag.startX;
+    if (!drag.moved && Math.abs(delta) > 6) {
+      drag.moved = true;
+      setIsDragging(true);
+    }
+    if (drag.moved) track.scrollLeft = drag.startScroll - delta;
+  }
+
+  function handlePointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    const track = trackRef.current;
+    if (!drag || !track || event.pointerId !== drag.pointerId) return;
+    dragRef.current = null;
+    if (track.hasPointerCapture(event.pointerId)) track.releasePointerCapture(event.pointerId);
+    if (!drag.moved) return;
+    suppressClick.current = true;
+    setIsDragging(false);
+    const next = nearestIndex(track);
+    track.scrollTo({ left: next * Math.max(1, track.clientWidth), behavior: "smooth" });
+    reportIndex(next);
+  }
+
+  function handleClickCapture(event: React.MouseEvent<HTMLDivElement>) {
+    if (!suppressClick.current) return;
+    suppressClick.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  return (
+    <div
+      ref={trackRef}
+      className={`swipe-gallery ${className}${isDragging ? " is-dragging" : ""}`.trim()}
+      role="group"
+      aria-roledescription="carrusel"
+      aria-label={label}
+      onScroll={handleScroll}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
+      onClickCapture={handleClickCapture}
+    >
+      {children}
+    </div>
+  );
+}
+
 function Icon({ children }: { children: string }) {
   return <span aria-hidden="true">{children}</span>;
 }
@@ -1178,8 +1285,9 @@ export default function Home() {
     const images = listingImages(listing);
     if (images.length < 2) return;
     setGalleryIndexes((current) => {
-      const currentIndex = current[listing.id] ?? 0;
-      return { ...current, [listing.id]: (currentIndex + direction + images.length) % images.length };
+      const index = Math.min(current[listing.id] ?? 0, images.length - 1);
+      const next = Math.min(images.length - 1, Math.max(0, index + direction));
+      return next === index ? current : { ...current, [listing.id]: next };
     });
   }
 
@@ -1370,19 +1478,45 @@ export default function Home() {
                 return (
                 <article key={listing.id} className={`listing-card ${activeCategory === "Depas" ? "depa-card" : ""}`} onClick={() => openListing(listing)}>
                   <div className="listing-image-wrap">
-                    <img
-                      src={imageUrl(images[imageIndex] ?? listing.image, 900)}
-                      srcSet={`${imageUrl(images[imageIndex] ?? listing.image, 480)} 480w, ${imageUrl(images[imageIndex] ?? listing.image, 900)} 900w, ${imageUrl(images[imageIndex] ?? listing.image, 1200)} 1200w`}
-                      sizes={activeCategory === "Depas" ? "(max-width: 700px) 92vw, (max-width: 1050px) 46vw, 31vw" : "(max-width: 700px) 92vw, (max-width: 1050px) 46vw, 24vw"}
-                      alt={`${listing.title}, fotografía ${imageIndex + 1}`}
-                      className="listing-image"
-                      loading={listingIndex < 4 ? "eager" : "lazy"}
-                      decoding="async"
-                      fetchPriority={listingIndex < 2 ? "high" : "auto"}
-                    />
+                    {images.length > 1 ? (
+                      <SwipeGallery
+                        index={imageIndex}
+                        count={images.length}
+                        onIndexChange={(index) => setGalleryIndexes((current) => (current[listing.id] === index ? current : { ...current, [listing.id]: index }))}
+                        label={`Fotografías de ${listing.title}`}
+                      >
+                        {images.map((image, index) => (
+                          <img
+                            key={`${listing.id}-slide-${index}`}
+                            src={imageUrl(image, 900)}
+                            srcSet={`${imageUrl(image, 480)} 480w, ${imageUrl(image, 900)} 900w, ${imageUrl(image, 1200)} 1200w`}
+                            sizes={activeCategory === "Depas" ? "(max-width: 700px) 92vw, (max-width: 1050px) 46vw, 31vw" : "(max-width: 700px) 92vw, (max-width: 1050px) 46vw, 24vw"}
+                            alt={`${listing.title}, fotografía ${index + 1}`}
+                            className="listing-image"
+                            loading={listingIndex < 4 && index === 0 ? "eager" : "lazy"}
+                            decoding="async"
+                            fetchPriority={listingIndex < 2 && index === 0 ? "high" : "auto"}
+                            draggable={false}
+                          />
+                        ))}
+                      </SwipeGallery>
+                    ) : (
+                      <img
+                        src={imageUrl(images[0] ?? listing.image, 900)}
+                        srcSet={`${imageUrl(images[0] ?? listing.image, 480)} 480w, ${imageUrl(images[0] ?? listing.image, 900)} 900w, ${imageUrl(images[0] ?? listing.image, 1200)} 1200w`}
+                        sizes={activeCategory === "Depas" ? "(max-width: 700px) 92vw, (max-width: 1050px) 46vw, 31vw" : "(max-width: 700px) 92vw, (max-width: 1050px) 46vw, 24vw"}
+                        alt={`${listing.title}, fotografía 1`}
+                        className="listing-image"
+                        loading={listingIndex < 4 ? "eager" : "lazy"}
+                        decoding="async"
+                        fetchPriority={listingIndex < 2 ? "high" : "auto"}
+                        draggable={false}
+                      />
+                    )}
                     {listing.badge && <span className="listing-badge">{listing.badge}</span>}
                     <button disabled={favoriteMutations.includes(listing.id)} className={`favorite-button ${favorites.includes(listing.id) ? "is-favorite" : ""}`} onClick={(event) => { event.stopPropagation(); toggleFavorite(listing.id); }} aria-label={favorites.includes(listing.id) ? "Quitar de favoritos" : "Guardar en favoritos"} aria-pressed={favorites.includes(listing.id)}>{favoriteMutations.includes(listing.id) ? "…" : favorites.includes(listing.id) ? "♥" : "♡"}</button>
-                    <button className="carousel-arrow" disabled={images.length < 2} onClick={(event) => { event.stopPropagation(); moveGallery(listing, 1); }} aria-label={`Siguiente fotografía de ${listing.title}`}>›</button>
+                    <button className="carousel-arrow previous" disabled={images.length < 2 || imageIndex === 0} onClick={(event) => { event.stopPropagation(); moveGallery(listing, -1); }} aria-label={`Fotografía anterior de ${listing.title}`}>‹</button>
+                    <button className="carousel-arrow" disabled={images.length < 2 || imageIndex >= images.length - 1} onClick={(event) => { event.stopPropagation(); moveGallery(listing, 1); }} aria-label={`Siguiente fotografía de ${listing.title}`}>›</button>
                     {images.length > 1 && <div className="image-dots" aria-label={`Fotografía ${imageIndex + 1} de ${images.length}`}>
                       {images.map((_, index) => <button key={`${listing.id}-${index}`} className={index === imageIndex ? "active" : ""} onClick={(event) => { event.stopPropagation(); setGalleryIndexes((current) => ({ ...current, [listing.id]: index })); }} aria-label={`Ver fotografía ${index + 1}`} aria-current={index === imageIndex ? "true" : undefined} />)}
                     </div>}
@@ -1505,11 +1639,25 @@ export default function Home() {
         <Modal onClose={() => setSelectedListing(null)} className="detail-modal">
           <button className="close-button detail-close" onClick={() => setSelectedListing(null)} aria-label="Cerrar detalle">×</button>
           <div className="detail-image">
-            <img src={imageUrl(selectedGallery[safeSelectedImageIndex] ?? selectedListing.image, 1200)} alt={`${selectedListing.title}, fotografía ${safeSelectedImageIndex + 1}`} />
+            {selectedGallery.length > 1 ? (
+              <SwipeGallery
+                className="detail-swipe-gallery"
+                index={safeSelectedImageIndex}
+                count={selectedGallery.length}
+                onIndexChange={setSelectedImageIndex}
+                label={`Fotografías de ${selectedListing.title}`}
+              >
+                {selectedGallery.map((image, index) => (
+                  <img key={`${selectedListing.id}-detail-slide-${index}`} src={imageUrl(image, 1200)} alt={`${selectedListing.title}, fotografía ${index + 1}`} loading={index === 0 ? "eager" : "lazy"} decoding="async" draggable={false} />
+                ))}
+              </SwipeGallery>
+            ) : (
+              <img src={imageUrl(selectedGallery[0] ?? selectedListing.image, 1200)} alt={`${selectedListing.title}, fotografía 1`} draggable={false} />
+            )}
             {selectedListing.badge && <span>{selectedListing.badge}</span>}
             {selectedGallery.length > 1 && <>
-              <button className="detail-gallery-arrow previous" onClick={() => setSelectedImageIndex((current) => (current - 1 + selectedGallery.length) % selectedGallery.length)} aria-label="Fotografía anterior">‹</button>
-              <button className="detail-gallery-arrow next" onClick={() => setSelectedImageIndex((current) => (current + 1) % selectedGallery.length)} aria-label="Siguiente fotografía">›</button>
+              <button className="detail-gallery-arrow previous" disabled={safeSelectedImageIndex === 0} onClick={() => setSelectedImageIndex((current) => Math.max(0, current - 1))} aria-label="Fotografía anterior">‹</button>
+              <button className="detail-gallery-arrow next" disabled={safeSelectedImageIndex >= selectedGallery.length - 1} onClick={() => setSelectedImageIndex((current) => Math.min(selectedGallery.length - 1, current + 1))} aria-label="Siguiente fotografía">›</button>
               <span className="detail-image-count">{safeSelectedImageIndex + 1} / {selectedGallery.length}</span>
               <div className="detail-thumbnails" aria-label="Seleccionar fotografía">
                 {selectedGallery.map((image, index) => <button key={`${selectedListing.id}-detail-${index}`} className={index === safeSelectedImageIndex ? "active" : ""} onClick={() => setSelectedImageIndex(index)} aria-label={`Ver fotografía ${index + 1}`} aria-current={index === safeSelectedImageIndex ? "true" : undefined}><img src={imageUrl(image, 180)} alt="" /></button>)}

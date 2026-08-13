@@ -28,9 +28,12 @@ test("ships the finished estadia20 marketplace", async () => {
   assert.match(page, /If-None-Match/);
   assert.match(page, /useDeferredValue/);
   assert.match(page, /aria-live="polite"/);
+  assert.match(page, /SwipeGallery/);
+  assert.match(page, /detail-swipe-gallery/);
   assert.match(styles, /\.results-error/);
   assert.match(styles, /prefers-reduced-motion/);
   assert.match(styles, /\.listing-grid/);
+  assert.match(styles, /scroll-snap-type: x mandatory/);
   assert.doesNotMatch(page, /traffic-banner/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 
