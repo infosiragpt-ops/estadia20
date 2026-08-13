@@ -12,7 +12,7 @@ test("ships the finished estadia20 marketplace", async () => {
     readFile(new URL("package.json", root), "utf8"),
   ]);
 
-  assert.match(layout, /Estadia20 — encuentra tu próximo lugar/);
+  assert.match(layout, /Llaves365 — encuentra tu próximo lugar/);
   assert.match(page, /Roomies/);
   assert.match(page, /Depas/);
   assert.match(page, /Estadías/);
