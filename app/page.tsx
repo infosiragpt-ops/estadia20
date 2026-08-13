@@ -955,7 +955,7 @@ export default function Home() {
   if (search.trim()) activeFilterChips.push({ key: "search", label: search.trim(), clear: () => setSearch("") });
   if (bedrooms !== "Todos" && activeCategory === "Depas") activeFilterChips.push({ key: "bedrooms", label: bedroomSummary, clear: () => setBedrooms("Todos") });
   if ((minPrice || maxPrice) && activeCategory === "Depas") activeFilterChips.push({ key: "budget", label: budgetSummary, clear: () => { setMinPrice(""); setMaxPrice(""); } });
-  if (maxPrice && activeCategory !== "Roomies" && activeCategory !== "Depas") activeFilterChips.push({ key: "budget", label: `Hasta S/ ${Number(maxPrice).toLocaleString("es-PE")}`, clear: () => setMaxPrice("") });
+  if (maxPrice && activeCategory !== "Depas") activeFilterChips.push({ key: "budget", label: `Hasta S/ ${Number(maxPrice).toLocaleString("es-PE")}`, clear: () => setMaxPrice("") });
   if (activeCategory === "Depas") selectedDepaFeatures.forEach((feature) => activeFilterChips.push({ key: feature, label: feature, clear: () => toggleDepaFeature(feature) }));
   if (activeCategory === "Transporte" && service !== "Todos") activeFilterChips.push({ key: "service", label: service, clear: () => setService("Todos") });
 
@@ -989,10 +989,16 @@ export default function Home() {
   }
 
   function openDepaFilters() {
+    setShowMenu(false);
     setShowSearchOptions(false);
     setShowAirbnbCalendar(false);
     setShowAirbnbGuests(false);
     setShowDepaFilters(true);
+  }
+
+  function openFiltersModal() {
+    setShowMenu(false);
+    setShowFilters(true);
   }
 
   function openAirbnbCalendar(stage: AirbnbDateStage) {
@@ -1108,6 +1114,7 @@ export default function Home() {
   }
 
   function requestPublish() {
+    setShowMenu(false);
     if (!currentUser) {
       setPublishAfterLogin(true);
       setShowLogin(true);
@@ -1145,8 +1152,19 @@ export default function Home() {
   }
 
   function openListing(listing: Listing) {
+    setShowMenu(false);
     setSelectedImageIndex(galleryIndexes[listing.id] ?? 0);
     setSelectedListing(listing);
+  }
+
+  function openLogin() {
+    setShowMenu(false);
+    setShowLogin(true);
+  }
+
+  function openPlans() {
+    setShowMenu(false);
+    setShowPlans(true);
   }
 
   return (
@@ -1168,7 +1186,7 @@ export default function Home() {
           </nav>
 
           <div className="header-actions">
-            <button className="host-link" onClick={() => setShowLogin(true)}>{currentUser ? "Mi cuenta" : "Iniciar sesión"}</button>
+            <button className="host-link" onClick={openLogin}>{currentUser ? "Mi cuenta" : "Iniciar sesión"}</button>
             <button className="globe-button" aria-label="Idioma y moneda"><GlobeIcon /></button>
             <button className="menu-trigger" aria-label="Abrir menú" aria-expanded={showMenu} onClick={() => setShowMenu((open) => !open)}>
               <span className="hamburger"><i /><i /><i /></span>
@@ -1272,14 +1290,18 @@ export default function Home() {
 
         {showMenu && (
           <div className="menu-popover">
-            <button className="menu-strong" onClick={() => { setShowLogin(true); setShowMenu(false); }}>{currentUser ? `Mi cuenta · ${currentUser.name}` : "Iniciar sesión"}</button>
-            {currentUser?.role === "admin" && <button onClick={() => { setShowAdminPanel(true); setShowMenu(false); }}>Panel de administración</button>}
-            {currentUser && <button onClick={() => { setShowMyListings(true); setShowMenu(false); }}>Mis anuncios</button>}
-            <button onClick={() => { setShowPlans(true); setShowMenu(false); }}>Ver planes para publicar</button>
-            <button onClick={() => { setShowFilters(true); setShowMenu(false); }}>Filtros de búsqueda</button>
+            <span className="menu-section-label">Cuenta</span>
+            <button className="menu-strong" onClick={openLogin}>{currentUser ? `Mi cuenta · ${currentUser.name}` : "Iniciar sesión"}</button>
+            {currentUser?.role === "admin" && <button onClick={() => { setShowMenu(false); setShowAdminPanel(true); }}>Panel de administración</button>}
+            {currentUser && <button onClick={() => { setShowMenu(false); setShowMyListings(true); }}>Mis anuncios</button>}
+            <button onClick={() => { flashNotice(`${favorites.length} favoritos guardados`); setShowMenu(false); }}>Mis favoritos {favorites.length > 0 && <span>{favorites.length}</span>}</button>
             <div className="menu-divider" />
-            <button onClick={() => { requestPublish(); setShowMenu(false); }}>Publicar un anuncio</button>
-            <button onClick={() => { flashNotice(`${favorites.length} favoritos guardados`); setShowMenu(false); }}>Mis favoritos <span>{favorites.length}</span></button>
+            <span className="menu-section-label">Publicar</span>
+            <button onClick={requestPublish}>Publicar un anuncio</button>
+            <button onClick={openPlans}>Ver planes para publicar</button>
+            <div className="menu-divider" />
+            <span className="menu-section-label">Ayuda</span>
+            <button onClick={openFiltersModal}>Filtros de búsqueda</button>
             <button onClick={() => { flashNotice(`Soporte directo: ${SUPPORT_EMAIL}`); setShowMenu(false); }}>Centro de ayuda</button>
           </div>
         )}
@@ -1298,7 +1320,7 @@ export default function Home() {
             </div>
             <div className="results-actions">
               <label className="sort-control"><span>Ordenar por</span><select value={sort} onChange={(event) => setSort(event.target.value as ListingSort)} aria-label="Ordenar resultados">{sortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-              {activeCategory !== "Roomies" && <button className="toolbar-filter" onClick={() => activeCategory === "Depas" ? openDepaFilters() : setShowFilters(true)}><FilterIcon /><span>Filtros</span>{filterButtonCount > 0 && <b>{filterButtonCount}</b>}</button>}
+              <button className={`toolbar-filter ${activeCategory === "Roomies" ? "mobile-only-filter" : ""}`} onClick={() => activeCategory === "Depas" ? openDepaFilters() : openFiltersModal()} aria-label={`Abrir filtros${filterButtonCount ? `, ${filterButtonCount} activos` : ""}`}><FilterIcon /><span>Filtros</span>{filterButtonCount > 0 && <b>{filterButtonCount}</b>}</button>
             </div>
           </div>
 
@@ -1387,7 +1409,7 @@ export default function Home() {
       <footer className="footer">
         <div className="footer-top">
           <div><strong>Asistencia</strong><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Centro de ayuda</button><button onClick={() => flashNotice("Próximamente: seguridad y confianza")}>Seguridad</button></div>
-          <div><strong>Publica</strong><button onClick={requestPublish}>Anuncia tu espacio</button><button onClick={() => setShowPlans(true)}>Planes anuales</button></div>
+          <div><strong>Publica</strong><button onClick={requestPublish}>Anuncia tu espacio</button><button onClick={openPlans}>Planes anuales</button></div>
           <div><strong>{BRAND}</strong><button onClick={() => flashNotice(`Muy pronto: conoce al equipo ${BRAND}`)}>Quiénes somos</button><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Contacto</button></div>
         </div>
         <div className="footer-bottom"><span>© 2026 {BRAND} · estadia20.com · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>

@@ -30,7 +30,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible { outline: 3px solid rgba(17,17,17,.9); outline-offset: 3px; }
-.app-shell { min-height: 100vh; }
+.app-shell { width: 100%; min-height: 100vh; }
 
 /* Header */
 .market-header { position: relative; z-index: 30; padding: 48px 4.5vw 40px; background: #ffbd00; color: #050505; }
@@ -168,6 +168,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .menu-popover button:hover { background: var(--soft); }
 .menu-popover .menu-strong { font-weight: 700; }
 .menu-popover button span { min-width: 22px; padding: 3px 7px; border-radius: 10px; background: var(--soft); text-align: center; font-size: 10px; }
+.menu-section-label { display: block; padding: 7px 10px 3px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .menu-divider { height: 1px; margin: 5px -8px; background: var(--soft-line); }
 
 /* Results */
@@ -188,6 +189,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sort-control:focus-within { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
 .toolbar-filter { min-height: 50px; display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); font-size: 11px; font-weight: 800; box-shadow: 0 2px 7px rgba(0,0,0,.04); }
 .toolbar-filter:hover { border-color: #999; background: #fafafa; }
+/* En Roomies el botón de filtros solo aparece en el teléfono: en escritorio la
+   búsqueda de Roomies se mantiene sin filtros, como hasta ahora. */
+.mobile-only-filter { display: none; }
 .toolbar-filter svg { width: 19px; height: 19px; }
 .toolbar-filter b { min-width: 20px; height: 20px; display: grid; place-items: center; padding: 0 5px; border-radius: 10px; background: var(--ink); color: #fff; font-size: 9px; }
 .active-filter-chips { display: flex; align-items: center; gap: 7px; overflow-x: auto; margin: -12px 0 26px; padding: 2px 2px 4px; scrollbar-width: none; }
@@ -420,29 +424,37 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 @media (max-width: 700px) {
-  /* --- Cabecera y navegación de servicios --- */
-  .market-header { padding: 12px max(14px, env(safe-area-inset-right)) 14px max(14px, env(safe-area-inset-left)); }
-  .services-top { min-height: 0; gap: 6px 8px; }
-  .brand { gap: 7px; font-size: 22px; }
-  .brand-symbol { width: 38px; height: 38px; }
+  /* --- Cabecera compacta y pegajosa: 44px de barra superior + 56px de
+         pestañas + buscador. Con top negativo, al hacer scroll queda fijada
+         solo la píldora de búsqueda (8+44+6+56+8 = 122px se ocultan). --- */
+  .market-header { position: sticky; top: -122px; z-index: 30; padding: 8px max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left)); }
+  .services-top { min-height: 0; grid-template-rows: 44px 56px; gap: 6px 8px; }
+  .brand { gap: 6px; font-size: 19px; }
+  .brand-symbol { width: 32px; height: 32px; }
   .host-link { min-height: 44px; padding: 8px 6px; font-size: 14px; }
   .globe-button { display: none; }
   .menu-trigger { width: 44px; height: 44px; padding: 8px; }
   .hamburger { gap: 5px; }
   .hamburger i { height: 2px; }
-  .service-nav { justify-content: flex-start; gap: 16px; overflow-x: auto; margin: 0 -4px; padding: 2px 4px 0; scrollbar-width: none; }
-  .service-nav::-webkit-scrollbar { display: none; }
-  .service-tab { min-height: 48px; flex: 0 0 auto; gap: 6px; padding: 7px 4px 12px; }
-  .service-tab::after { height: 6px; }
-  .service-icon { width: 38px; height: 38px; }
-  .service-icon-transporte { width: 50px; }
-  .service-tab strong { font-size: 16px; }
+
+  /* Las 4 categorías entran en pantalla a 375px (sin scroll oculto): icono
+     arriba, etiqueta de 13px abajo y altura fija para que la pestaña activa
+     no salte de tamaño. */
+  .service-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; overflow: visible; }
+  .service-tab { min-width: 0; height: 56px; flex: none; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px 2px 10px; }
+  .service-tab, .service-tab:hover, .service-tab.active { transform: none; }
+  .service-tab::after { left: 8px; right: 8px; height: 4px; }
+  .service-icon { width: 24px; height: 24px; }
+  .service-icon-transporte { width: 32px; }
+  .service-tab > span:last-child { display: block; max-width: 100%; overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+  .service-tab strong { font-size: 13px; letter-spacing: -.03em; }
 
   /* --- Buscador compacto --- */
-  .compact-search { height: 68px; grid-template-columns: minmax(0, 1.6fr) minmax(104px, .72fr) 53px; padding: 4px 6px 4px 8px; border-width: 4px; }
-  .compact-search.roomies-search { grid-template-columns: minmax(0, 1fr) 53px; }
-  .compact-search.depas-search { grid-template-columns: minmax(0, 1fr) 48px 53px; }
-  .compact-search.airbnb-search { height: 112px; grid-template-columns: repeat(3, minmax(0, 1fr)) 53px; grid-template-rows: 50px 44px; padding: 5px 6px 7px 10px; border-radius: 28px; }
+  .search-row { margin-top: 8px; }
+  .compact-search { height: 56px; grid-template-columns: minmax(0, 1.6fr) minmax(104px, .72fr) 46px; padding: 3px 4px 3px 8px; border-width: 3px; }
+  .compact-search.roomies-search { grid-template-columns: minmax(0, 1fr) 46px; }
+  .compact-search.depas-search { grid-template-columns: minmax(0, 1fr) 46px 46px; }
+  .compact-search.airbnb-search { height: 106px; grid-template-columns: repeat(3, minmax(0, 1fr)) 46px; grid-template-rows: 50px 44px; padding: 3px 4px 3px 8px; border-radius: 28px; }
   .airbnb-search .location-field { grid-column: 1 / 4; grid-row: 1; }
   .airbnb-search .search-button { grid-column: 4; grid-row: 1 / 3; align-self: center; }
   .airbnb-search .airbnb-date-field, .airbnb-search .airbnb-guest-field { height: 44px; padding: 2px 9px; border-radius: 12px; }
@@ -455,13 +467,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .depa-mobile-filter { position: relative; width: 44px; height: 44px; display: grid; place-items: center; padding: 11px; border: 1px solid #d4d4d4; border-radius: 50%; background: #fff; color: var(--ink); }
   .depa-mobile-filter svg { width: 100%; height: 100%; }
   .depa-mobile-filter b { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px; border-radius: 9px; background: var(--ink); color: #fff; font-size: 9px; }
-  .compact-field { height: 46px; padding: 0 10px; }
+  .compact-field { height: 44px; padding: 0 10px; }
   .location-field { gap: 7px; padding-left: 3px; }
-  .location-icon { width: 34px; height: 34px; }
+  .location-icon { width: 28px; height: 28px; }
   .compact-field strong { font-size: 13px; }
   .guest-field { display: none; }
   .airbnb-search .airbnb-guest-field { display: grid; }
-  .search-button { width: 47px; height: 47px; padding: 12px; }
+  .search-button { width: 44px; height: 44px; padding: 11px; }
 
   /* --- Los popovers del buscador se vuelven hojas ancladas abajo, a la
          altura del pulgar, en lugar de flotar con offsets mágicos. --- */
@@ -478,7 +490,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .depa-filter-popover { padding: 18px 16px calc(16px + env(safe-area-inset-bottom)); }
   .calendar-heading strong { font-size: 18px; }
   .calendar-heading small { font-size: 10px; }
-  .calendar-close { width: 40px; height: 40px; font-size: 25px; }
+  .calendar-close { width: 44px; height: 44px; font-size: 25px; }
   .calendar-date-summary { margin-top: 14px; }
   .calendar-date-summary > button { min-height: 44px; padding: 8px 9px; }
   .calendar-date-summary button strong { font-size: 11px; }
@@ -493,7 +505,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .calendar-footer button { min-height: 46px; font-size: 13px; }
   .depa-filter-heading strong { font-size: 17px; }
   .depa-filter-heading span { font-size: 10px; }
-  .depa-filter-heading > button { width: 40px; height: 40px; font-size: 25px; }
+  .depa-filter-heading > button { width: 44px; height: 44px; font-size: 25px; }
   .depa-filter-content { display: block; }
   .depa-filter-section { padding: 18px 0; }
   .depa-filter-section + .depa-filter-section { border-top: 1px solid var(--soft-line); border-left: 0; padding-left: 0; }
@@ -505,7 +517,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .feature-options button { min-height: 44px; padding: 9px; font-size: 11px; }
   .depa-filter-footer { position: sticky; bottom: calc(-16px - env(safe-area-inset-bottom)); z-index: 2; margin: 0 -16px calc(-16px - env(safe-area-inset-bottom)); padding: 12px 16px calc(14px + env(safe-area-inset-bottom)); background: #fff; box-shadow: 0 -8px 18px rgba(0,0,0,.06); }
   .depa-filter-footer .dark-button, .apply-search { min-height: 48px; font-size: 13px; }
-  .guest-control button { width: 40px; height: 40px; }
+  .guest-control button { width: 44px; height: 44px; }
   .guest-control strong { font-size: 14px; }
   .guest-control small { font-size: 11px; }
   .menu-popover { top: 62px; right: max(10px, env(safe-area-inset-right)); left: auto; width: min(300px, calc(100vw - 20px)); }
@@ -518,11 +530,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .results-copy h1 { font-size: 25px; }
   .results-copy p { font-size: 12px; line-height: 1.45; }
   .results-actions { width: 100%; }
-  .sort-control { min-width: 0; flex: 1; min-height: 50px; }
-  .toolbar-filter { min-width: 50px; justify-content: center; }
+  .results-actions { align-items: stretch; }
+  .sort-control { min-width: 0; flex: 1; padding: 6px 12px; }
+  .sort-control span { font-size: 9px; }
+  .sort-control select { min-height: 44px; }
+  .toolbar-filter { min-width: 56px; min-height: 56px; justify-content: center; }
   .toolbar-filter span { display: none; }
+  .mobile-only-filter { display: inline-flex; }
   .active-filter-chips { margin-top: -8px; margin-bottom: 21px; }
-  .active-filter-chips button { min-height: 40px; font-size: 11px; }
+  .active-filter-chips button { min-height: 44px; font-size: 11px; }
   .results-error { align-items: stretch; flex-direction: column; }
   .results-error button { width: 100%; min-height: 44px; }
   .listing-grid { grid-template-columns: 1fr; gap: 32px; }
@@ -537,7 +553,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .card-title-row h2 { font-size: 15px; }
   .listing-location, .listing-meta, .listing-dates { font-size: 12px; }
   .favorite-button { top: 6px; right: 6px; width: 44px; height: 44px; }
-  .carousel-arrow { width: 40px; height: 40px; }
+  .carousel-arrow { width: 44px; height: 44px; }
   .whatsapp-card { min-height: 44px; padding-right: 14px; padding-left: 11px; font-size: 11px; }
   .dark-button { min-height: 44px; }
   .load-more-row .dark-button { width: 100%; min-height: 48px; }
@@ -545,7 +561,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   /* --- Pie de página --- */
   .footer { padding: 42px max(22px, env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left)); }
   .footer-top { grid-template-columns: 1fr; gap: 28px; }
-  .footer-top button { min-height: 40px; padding: 8px 0; font-size: 13px; }
+  .footer-top button { min-height: 44px; padding: 10px 0; font-size: 14px; }
   .footer-bottom { align-items: start; flex-direction: column; }
   .toast { bottom: calc(18px + env(safe-area-inset-bottom)); }
 
@@ -554,19 +570,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .modal-backdrop { padding: 0; place-items: end center; }
   .modal { width: 100%; max-height: calc(100dvh - 20px); padding: 20px 16px calc(24px + env(safe-area-inset-bottom)); border-radius: 20px 20px 0 0; }
   .modal h2 { font-size: 23px; }
-  .close-button { width: 40px; height: 40px; font-size: 24px; }
+  .close-button { width: 44px; height: 44px; font-size: 25px; }
   .login-modal { max-width: none; }
   .login-close { top: 12px; right: 12px; }
   .auth-switch button { min-height: 44px; font-size: 12px; }
   .email-access-toggle { min-height: 44px; font-size: 12px; }
   .text-action { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
   .modal-options button { min-height: 44px; font-size: 12px; }
+  .publish-feature-options button { min-height: 44px; font-size: 11px; }
   .form-grid { grid-template-columns: 1fr; }
   .image-upload > span { min-height: 64px; }
   .primary-button { min-height: 48px; font-size: 12px; }
 
   /* --- Detalle del anuncio: hoja a pantalla completa con CTA fijo --- */
-  .detail-modal { display: flex; flex-direction: column; height: 100dvh; max-height: 100dvh; padding: 0; border-radius: 0; }
+  .detail-modal { display: flex; flex-direction: column; height: 100dvh; max-height: 100dvh; padding: 0; border-radius: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .detail-thumbnails { scrollbar-width: none; }
+  .detail-thumbnails::-webkit-scrollbar { display: none; }
   .detail-close { position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 10px; z-index: 6; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
   .detail-image { flex: 0 0 auto; min-height: 44vh; }
   .detail-image img { position: absolute; }
@@ -584,17 +603,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* En pantallas táctiles no existe hover: la flecha del carrusel debe verse
-   siempre para poder pasar fotografías con el dedo. */
+   siempre para poder pasar fotografías con el dedo, y los puntos del carrusel
+   amplían su zona táctil sin crecer visualmente. */
 @media (hover: none) {
   .carousel-arrow { opacity: 1; }
+  .image-dots button { position: relative; }
+  .image-dots button::after { content: ""; position: absolute; inset: -15px -3px; }
 }
 
 @media (max-width: 360px) {
-  .brand { font-size: 19px; }
-  .brand-symbol { width: 32px; height: 32px; }
+  .brand { font-size: 17px; }
+  .brand-symbol { width: 28px; height: 28px; }
   .host-link { padding: 8px 3px; font-size: 13px; }
-  .service-nav { gap: 12px; }
-  .compact-search { grid-template-columns: minmax(0, 1.5fr) minmax(88px, .7fr) 50px; }
+  .service-nav { gap: 4px; }
+  .service-tab strong { font-size: 11px; }
+  .compact-search { grid-template-columns: minmax(0, 1.5fr) minmax(88px, .7fr) 46px; }
   .airbnb-search .airbnb-date-field, .airbnb-search .airbnb-guest-field { padding: 2px 6px; }
 }
 
@@ -680,5 +703,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .compact-field input, .full-input, .price-input input, .auth-form input,
   .publish-modal input, .publish-modal textarea, .publish-modal select,
   .edit-listing-form input, .edit-listing-form textarea,
-  .depa-price-range input, .date-controls input, .sort-control select { font-size: 16px; }
+  .depa-price-range input, .date-controls input, .sort-control select { min-height: 44px; font-size: 16px; }
+  /* Línea base táctil: todo campo de texto o select visible mide >=44px. */
+  input:not([type="file"]), select, textarea { min-height: 44px; font-size: 16px; }
 }
