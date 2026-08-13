@@ -13,8 +13,10 @@ import {
   type Listing,
 } from "./data";
 
-const BRAND = "Estadia20";
-const BRAND_MARK = "estadia20";
+// Marca pública: el sitio vive en llaves365.com. Los nombres internos
+// (repo, systemd, rutas del VPS, cookies) siguen siendo "estadia20".
+const BRAND = "Llaves365";
+const BRAND_MARK = "llaves365";
 const SUPPORT_EMAIL = "hola@estadia20.com";
 
 const categories: Array<{ id: Category; label: string; short: string }> = [
@@ -1412,7 +1414,7 @@ export default function Home() {
           <div><strong>Publica</strong><button onClick={requestPublish}>Anuncia tu espacio</button><button onClick={openPlans}>Planes anuales</button></div>
           <div><strong>{BRAND}</strong><button onClick={() => flashNotice(`Muy pronto: conoce al equipo ${BRAND}`)}>Quiénes somos</button><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Contacto</button></div>
         </div>
-        <div className="footer-bottom"><span>© 2026 {BRAND} · estadia20.com · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
+        <div className="footer-bottom"><span>© 2026 {BRAND} · llaves365.com · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
       </footer>
 
       <div className={`toast ${notice ? "visible" : ""} ${noticeTone === "error" ? "error" : ""}`} role={noticeTone === "error" ? "alert" : "status"} aria-live={noticeTone === "error" ? "assertive" : "polite"} aria-atomic="true"><span>{noticeTone === "error" ? "!" : "✓"}</span>{notice}</div>
