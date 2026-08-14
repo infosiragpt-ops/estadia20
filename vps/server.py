@@ -86,6 +86,10 @@ PHOTO_MAX_WIDTH = 1600
 PHOTO_MAX_HEIGHT = 1200
 PHOTO_QUALITY = 82
 CATEGORIES = {"Roomies", "Depas", "Airbnb", "Transporte"}
+# La pestaña pública se llama «Estadías», pero la base de datos conserva la
+# categoría histórica «Airbnb». El alias se acepta en todos los filtros y al
+# publicar, así los enlaces compartidos (?category=Estadías) siempre funcionan.
+CATEGORY_ALIASES = {"Estadías": "Airbnb", "Estadias": "Airbnb"}
 CATEGORY_PRICE_LABELS = {
     "Roomies": "por mes",
     "Depas": "por mes",
@@ -116,6 +120,9 @@ LISTING_SORTS = {
     "price_desc": "price DESC, rating DESC, id DESC",
     "rating": "rating DESC, reviews DESC, id DESC",
 }
+# Nombres cortos que llegan en enlaces compartidos (?sort=price); cualquier
+# otro valor desconocido sigue respondiendo 400.
+LISTING_SORT_ALIASES = {"price": "price_asc"}
 RATE_LIMIT_RULES = {
     ("POST", "/api/auth/register"): (8, 300),
     ("POST", "/api/auth/login"): (12, 300),
@@ -709,6 +716,10 @@ def listing_dict(row: sqlite3.Row) -> dict[str, object]:
         "ownerWhatsApp": row["owner_whatsapp"],
         "service": row["service"],
         "details": details,
+        # Los anuncios sembrados como demostración no pertenecen a ningún
+        # usuario (user_id NULL); la interfaz los marca como «Ejemplo» para no
+        # presentarlos como anuncios reales.
+        "isDemo": row["user_id"] is None,
     }
 
 
@@ -804,6 +815,13 @@ def search_matches(value: object, query: object) -> int:
         if not found:
             return 0
     return 1
+
+
+def canonical_category(value: object) -> str:
+    """Traduce el alias público («Estadías») a la categoría guardada en la
+    base de datos («Airbnb»); el resto de categorías pasa sin cambios."""
+    text = str(value or "").strip()
+    return CATEGORY_ALIASES.get(text, text)
 
 
 def parse_price(value: object) -> int:
@@ -912,7 +930,7 @@ def process_upload_image(content: bytes, extension: str) -> tuple[bytes, str]:
 
 
 def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row], dict[str, object]]:
-    category = parameters.get("category", [""])[0]
+    category = canonical_category(parameters.get("category", [""])[0])
     if category and category not in CATEGORIES:
         raise ValueError("Categoría inválida")
 
@@ -948,6 +966,7 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
     page = optional_integer(parameters.get("page", ["1"])[0], 1, 10_000) or 1
     page_size = optional_integer(parameters.get("pageSize", ["12"])[0], 1, 48) or 12
     sort = str(parameters.get("sort", ["recommended"])[0]).strip()
+    sort = LISTING_SORT_ALIASES.get(sort, sort)
     if sort not in LISTING_SORTS:
         raise ValueError("Orden inválido")
 
@@ -1186,7 +1205,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; "
             "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; "
-            "img-src 'self' data: https://images.unsplash.com https://lh3.googleusercontent.com; "
+            "img-src 'self' data: blob: https://images.unsplash.com https://lh3.googleusercontent.com; "
             "connect-src 'self' https://accounts.google.com; "
             "frame-src https://accounts.google.com; object-src 'none'; base-uri 'self'; "
             "form-action 'self'; frame-ancestors 'self'",
@@ -1398,6 +1417,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 etag=etag,
             )
             return
+        listing_match = re.fullmatch(r"/api/listings/(\d{1,10})", parsed.path)
+        if listing_match:
+            self.get_listing(int(listing_match.group(1)))
+            return
         if parsed.path == "/api/auth/me":
             user = self.authenticated_user()
             self.send_json({"user": user_dict(user) if user is not None else None})
@@ -1462,6 +1485,30 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             )
             return None
         return user
+
+    def get_listing(self, listing_id: int) -> None:
+        """Detalle público de un anuncio (GET /api/listings/{id}), con la
+        misma forma que un elemento del listado: alimenta los enlaces
+        compartidos del tipo /?listing=ID."""
+        with connect() as database:
+            row = database.execute(
+                "SELECT * FROM listings WHERE id = ?", (listing_id,)
+            ).fetchone()
+        if row is None:
+            self.send_api_error(
+                "La publicación ya no está disponible.",
+                HTTPStatus.NOT_FOUND,
+                "listing_not_found",
+            )
+            return
+        payload = {"listing": listing_dict(row)}
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        etag = f'"{hashlib.sha256(serialized).hexdigest()[:24]}"'
+        self.send_json(
+            payload,
+            cache_control="public, max-age=30, stale-while-revalidate=120",
+            etag=etag,
+        )
 
     def my_listings(self) -> None:
         user = self.authenticated_user()
@@ -1562,7 +1609,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         )
 
     def admin_listings(self, parameters: dict[str, list[str]]) -> None:
-        category = parameters.get("category", [""])[0]
+        category = canonical_category(parameters.get("category", [""])[0])
         if category and category not in CATEGORIES:
             self.send_api_error("Categoría inválida.", HTTPStatus.BAD_REQUEST, "invalid_filters")
             return
@@ -2315,7 +2362,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         if user is None:
             return
         payload = self.read_json()
-        category = str(payload.get("category", ""))
+        category = canonical_category(payload.get("category", ""))
         title = str(payload.get("title", "")).strip()
         location = str(payload.get("location", "")).strip()
         description = str(payload.get("description", "")).strip()
