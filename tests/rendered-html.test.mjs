@@ -89,6 +89,35 @@ test("ships the finished estadia20 marketplace", async () => {
   await assert.rejects(access(new URL("app/_sites-preview", root)));
 });
 
+test("enlaza el Facebook oficial y el contacto por WhatsApp del administrador", async () => {
+  const [page, styles] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+  ]);
+
+  // La página oficial de Facebook, con nombre accesible en español.
+  assert.match(page, /https:\/\/www\.facebook\.com\/profile\.php\?id=61592602154789/);
+  assert.match(page, /Facebook de \$\{BRAND\}/);
+  // «Contacto» abre el WhatsApp del administrador (celular de Perú), no un
+  // aviso pasajero ni un correo.
+  assert.match(page, /https:\/\/wa\.me\/51918714054/);
+  assert.match(page, /Hola, les escribo desde llaves365\.com/);
+  assert.doesNotMatch(page, /onClick=\{\(\) => flashNotice\(`Soporte: \$\{SUPPORT_EMAIL\}`\)\}>Contacto</);
+  // Ambos enlaces abren en pestaña nueva sin filtrar el opener.
+  assert.match(page, /href=\{FACEBOOK_PAGE_URL\} target="_blank" rel="noopener noreferrer"/);
+  assert.match(page, /href=\{CONTACT_WHATSAPP_URL\} target="_blank" rel="noopener noreferrer"/);
+  assert.match(styles, /\.footer-social/);
+  assert.match(styles, /\.social-link \{ min-height: 44px;/);
+
+  // Y en el bundle de producción ya compilado que sirve el VPS.
+  const html = await readFile(new URL("vps/public/index.html", root), "utf8");
+  const scriptPath = html.match(/assets\/index-[\w-]+\.js/)?.[0];
+  assert.ok(scriptPath, "vps/public/index.html debe referenciar el bundle JS");
+  const bundle = await readFile(new URL(`vps/public/${scriptPath}`, root), "utf8");
+  assert.ok(bundle.includes("https://www.facebook.com/profile.php?id=61592602154789"));
+  assert.ok(bundle.includes("https://wa.me/51918714054"));
+});
+
 test("keeps database, uploads, favorites, and inquiries deployable", async () => {
   const [hosting, schema, listings, favorites, inquiries, uploads] = await Promise.all([
     readFile(new URL(".openai/hosting.json", root), "utf8"),

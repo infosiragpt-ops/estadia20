@@ -322,6 +322,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .footer-top > div { display: grid; justify-items: start; gap: 10px; }
 .footer-top strong { font-size: 12px; }.footer-top button { padding: 0; border: 0; background: transparent; color: #555; font-size: 11px; }
 .footer-top button:hover { text-decoration: underline; }
+.footer-top .footer-link { color: #555; font-size: 11px; text-decoration: none; }
+.footer-top .footer-link:hover { text-decoration: underline; }
+/* Canales oficiales: la página de Facebook y el WhatsApp de contacto del
+   administrador, con botones cómodos de tocar también en el teléfono. */
+.footer-social { max-width: 1180px; display: flex; flex-wrap: wrap; gap: 10px; margin: 0 auto 22px; }
+.social-link { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: #333; font-size: 12px; font-weight: 700; text-decoration: none; transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease; }
+.social-link:hover { border-color: #bbb; transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0,0,0,.07); text-decoration: none; }
+.social-link svg { width: 18px; height: 18px; display: block; }
+.social-link.social-facebook svg { color: #1877f2; }
+.social-link.social-whatsapp svg { color: #25d366; }
 /* La columna «Publica» es una tarjeta sombreada con lavado rosa: el camino
    para anunciar se distingue del resto del pie sin gritar. */
 .footer-publish-card { align-content: start; gap: 12px; padding: 18px; border: 1px solid #f3d6de; border-radius: 18px; background: linear-gradient(160deg, #ffffff 25%, #fff2f5); box-shadow: 0 12px 30px rgba(148,26,58,.1), 0 2px 6px rgba(0,0,0,.05); }
@@ -671,6 +681,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .footer { padding: 42px max(22px, env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left)); }
   .footer-top { grid-template-columns: 1fr; gap: 28px; }
   .footer-top button { min-height: 44px; padding: 10px 0; font-size: 14px; }
+  .footer-top .footer-link { min-height: 44px; display: inline-flex; align-items: center; padding: 10px 0; font-size: 14px; }
+  .footer-social { margin-bottom: 26px; }
+  .social-link { flex: 1 1 45%; justify-content: center; min-height: 48px; font-size: 14px; }
   /* La tarjeta de publicar sigue siendo cómoda de tocar en el teléfono. */
   .footer-publish-card { justify-items: stretch; padding: 16px; }
   .footer-top .footer-publish-primary, .footer-top .footer-publish-secondary { width: 100%; justify-content: center; min-height: 48px; padding: 10px 16px; font-size: 14px; }
