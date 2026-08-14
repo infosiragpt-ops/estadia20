@@ -203,9 +203,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sort-control:focus-within { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
 .toolbar-filter { min-height: 50px; display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); font-size: 11px; font-weight: 800; box-shadow: 0 2px 7px rgba(0,0,0,.04); }
 .toolbar-filter:hover { border-color: #999; background: #fafafa; }
-/* En Roomies el botón de filtros solo aparece en el teléfono: en escritorio la
-   búsqueda de Roomies se mantiene sin filtros, como hasta ahora. */
-.mobile-only-filter { display: none; }
 .toolbar-filter svg { width: 19px; height: 19px; }
 .toolbar-filter b { min-width: 20px; height: 20px; display: grid; place-items: center; padding: 0 5px; border-radius: 10px; background: var(--ink); color: #fff; font-size: 9px; }
 .active-filter-chips { display: flex; align-items: center; gap: 7px; overflow-x: auto; margin: -12px 0 26px; padding: 2px 2px 4px; scrollbar-width: none; }
@@ -474,6 +471,76 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .detail-stay-total strong { font-size: 14px; }
 .toast { position: fixed; left: 50%; bottom: 24px; z-index: 80; display: flex; align-items: center; gap: 9px; max-width: min(440px, calc(100% - 28px)); padding: 11px 15px; border-radius: 22px; background: var(--ink); color: #fff; box-shadow: 0 7px 24px rgba(0,0,0,.25); font-size: 11px; opacity: 0; pointer-events: none; transform: translate(-50%, 10px); transition: opacity .18s ease, transform .18s ease; }.toast.visible { opacity: 1; transform: translate(-50%, 0); }.toast.error { background: #8b1430; }.toast span { width: 18px; height: 18px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: #65cf91; color: #173f2a; font-size: 10px; font-weight: 800; }.toast.error span { background: #fff; color: #8b1430; }
 
+/* --- Compartir un anuncio (Web Share, copiar enlace y Facebook) --- */
+.share-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+.share-row button { min-height: 44px; display: inline-flex; align-items: center; gap: 7px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: #333; font-size: 11px; font-weight: 700; transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease; }
+.share-row button:hover { border-color: #bbb; transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0,0,0,.07); }
+.share-row button svg { width: 16px; height: 16px; display: block; }
+.share-row .share-facebook svg { color: #1877f2; }
+
+/* --- Reportar anuncio --- */
+.report-section { margin-top: 14px; }
+.report-link { min-height: 44px; padding: 8px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.report-link:hover { color: var(--ink); }
+.report-form { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); }
+.report-form label { display: grid; gap: 5px; font-size: 11px; font-weight: 700; }
+.report-form select, .report-form textarea { padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; font-size: 12px; }
+.report-actions { display: flex; align-items: center; justify-content: end; gap: 12px; }
+.report-thanks { margin: 14px 0 0; color: var(--green); font-size: 11px; font-weight: 700; }
+
+/* --- Aviso de cookies (Ley 29733): visible una vez, cómodo de cerrar --- */
+.cookie-notice { position: fixed; left: 50%; bottom: 14px; z-index: 70; width: min(680px, calc(100% - 24px)); display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: 0 12px 34px rgba(0,0,0,.18); transform: translateX(-50%); animation: fade-in .3s ease; }
+.cookie-notice p { flex: 1 1 320px; margin: 0; color: #444; font-size: 11px; line-height: 1.5; }
+.cookie-notice-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.cookie-notice-more { min-height: 44px; padding: 9px 12px; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.cookie-notice-accept { min-height: 44px; padding: 10px 20px; border: 0; border-radius: 999px; background: var(--ink); color: #fff; font-size: 11px; font-weight: 800; }
+.cookie-notice-accept:hover { background: #000; }
+
+/* --- Quiénes somos, Centro de ayuda y Privacidad/Términos --- */
+.info-modal .info-content { display: grid; gap: 12px; margin-top: 14px; }
+.info-content p { margin: 0; color: #444; font-size: 12px; line-height: 1.6; }
+.info-content h3 { margin: 10px 0 0; font-size: 13px; }
+.info-content a { color: var(--rose-dark); font-weight: 700; }
+.help-faq { display: grid; gap: 6px; margin: 0; }
+.help-faq dt { font-size: 12px; font-weight: 800; }
+.help-faq dd { margin: 0 0 8px; color: #555; font-size: 12px; line-height: 1.55; }
+.help-tips { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: #555; font-size: 12px; line-height: 1.55; }
+.info-contact { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
+.info-contact a { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: #333; font-size: 12px; font-weight: 700; text-decoration: none; }
+.info-contact a:hover { border-color: #bbb; }
+.info-contact svg { width: 17px; height: 17px; display: block; }
+.footer-inline-link { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.footer-inline-link:hover { color: var(--ink); }
+
+/* --- Recuperar contraseña y sesiones --- */
+.forgot-password-link { justify-self: start; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.forgot-password-link:hover { color: var(--ink); }
+.forgot-password { display: grid; gap: 10px; }
+.forgot-hint { margin: 0; color: #555; font-size: 11px; line-height: 1.5; }
+.forgot-message { margin: 0; padding: 12px; border-radius: 10px; background: #eef7f1; color: var(--green); font-size: 12px; font-weight: 700; }
+.reset-form { margin-top: 12px; }
+.account-logout-all { margin-top: 2px; color: var(--muted); font-size: 10px; }
+
+/* --- Ciclo de vida del anuncio (Mis anuncios y panel admin) --- */
+.status-chip { display: inline-block; margin-left: 7px; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #33409c; font-size: 9px; font-style: normal; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; vertical-align: 2px; }
+.status-chip.status-published { background: #e7f6ee; color: var(--green); }
+.status-chip.status-paused { background: #fff4dd; color: #8a6100; }
+.status-chip.status-rented { background: #efefef; color: #555; }
+.status-chip.status-pending { background: #e8f1fd; color: #1e5eb4; }
+.status-chip.status-rejected { background: #fdeaea; color: #a1272e; }
+.status-chip.status-demo { background: #f3e8fd; color: #6b2fa8; }
+.status-note { display: block; margin-top: 3px; color: #8a6100; font-size: 10px; }
+.admin-origin-filter { display: flex; gap: 4px; margin-bottom: 12px; padding: 4px; border-radius: 11px; background: var(--soft); }
+.admin-origin-filter button { flex: 1; min-height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; }
+.admin-origin-filter button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
+.admin-user-search { display: block; margin-bottom: 12px; }
+.admin-user-search input { width: 100%; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px; }
+.activity-today { margin-bottom: 14px; }
+.activity-device { display: block; color: #9a9a9a; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+
+/* --- Casilla «Usar cámara» del formulario de publicación --- */
+.photo-camera-tile > span b { font-size: 15px; }
+
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modal-up { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
 @keyframes toast-up { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
@@ -655,7 +722,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .sort-control select { min-height: 44px; }
   .toolbar-filter { min-width: 56px; min-height: 56px; justify-content: center; }
   .toolbar-filter span { display: none; }
-  .mobile-only-filter { display: inline-flex; }
   .active-filter-chips { margin-top: -8px; margin-bottom: 21px; }
   .active-filter-chips button { min-height: 44px; font-size: 11px; }
   .results-error { align-items: stretch; flex-direction: column; }
@@ -689,6 +755,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .footer-top .footer-publish-primary, .footer-top .footer-publish-secondary { width: 100%; justify-content: center; min-height: 48px; padding: 10px 16px; font-size: 14px; }
   .footer-bottom { align-items: start; flex-direction: column; }
   .toast { bottom: calc(18px + env(safe-area-inset-bottom)); }
+  .cookie-notice { bottom: calc(10px + env(safe-area-inset-bottom)); padding: 12px; }
+  .cookie-notice-actions { width: 100%; justify-content: end; }
+  .share-row button { flex: 1 1 30%; justify-content: center; min-height: 48px; font-size: 12px; }
+  .info-contact a { flex: 1 1 100%; justify-content: center; min-height: 48px; }
+  .report-actions .dark-button, .report-actions .text-action { min-height: 44px; }
 
   /* --- Banner de bienvenida con Google --- */
   .google-nudge-banner { width: calc(100% - 24px); margin: 12px auto -4px; padding: 10px; }

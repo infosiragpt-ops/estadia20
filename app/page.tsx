@@ -19,12 +19,15 @@ import {
 // (repo, systemd, rutas del VPS, cookies) siguen siendo "estadia20".
 const BRAND = "Llaves365";
 const BRAND_MARK = "llaves365";
-const SUPPORT_EMAIL = "hola@estadia20.com";
 // Canales oficiales del sitio: la página de Facebook de Llaves365 y el
-// WhatsApp del administrador (celular de Perú). «Contacto» siempre abre este
-// WhatsApp con un saludo corto ya escrito.
+// WhatsApp del administrador (celular de Perú). «Contacto» y el Centro de
+// ayuda siempre usan estos canales; no hay correo de soporte.
 const FACEBOOK_PAGE_URL = "https://www.facebook.com/profile.php?id=61592602154789";
+const CONTACT_WHATSAPP_DISPLAY = "+51 918 714 054";
 const CONTACT_WHATSAPP_URL = `https://wa.me/51918714054?text=${encodeURIComponent("Hola, les escribo desde llaves365.com")}`;
+// Aviso de cookies (Ley 29733): se muestra una vez por visitante y el cierre
+// queda guardado en localStorage.
+const COOKIE_CONSENT_STORAGE_KEY = "llaves365-cookie-consent";
 
 const categories: Array<{ id: Category; label: string; short: string }> = [
   { id: "Roomies", label: "Roomies", short: "Habitaciones" },
@@ -42,7 +45,9 @@ const categoryUrlAliases: Record<string, Category> = { "Estadías": "Airbnb", "E
 const categoryDetails: Record<Category, { noun: string; date: string; guests: string; priceLabel: string }> = {
   Roomies: { noun: "habitaciones", date: "Desde un mes", guests: "1 roomie", priceLabel: "por mes" },
   Depas: { noun: "departamentos", date: "6–12 meses", guests: "2 personas", priceLabel: "por mes" },
-  Airbnb: { noun: "alojamientos", date: "9–14 de ago", guests: "2 huéspedes", priceLabel: "por noche" },
+  // Las fechas de Estadías siempre salen del calendario elegido por el
+  // visitante; este texto es solo el respaldo si aún no eligió fechas.
+  Airbnb: { noun: "alojamientos", date: "Elige tus fechas", guests: "2 huéspedes", priceLabel: "por noche" },
   Transporte: { noun: "servicios", date: "Cuando quieras", guests: "Carga o pasajeros", priceLabel: "por servicio" },
 };
 
@@ -111,7 +116,17 @@ function saveGoogleNudgeMemory(patch: GoogleNudgeMemory) {
 
 const MAX_PUBLISH_PHOTOS = 15;
 const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
-const PHOTO_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
+// El iPhone entrega HEIC/HEIF por defecto: el servidor las convierte a JPEG
+// al subirlas (o rechaza esa foto con un mensaje claro si no puede).
+const PHOTO_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
+const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif";
+
+function isAcceptedPhoto(file: File) {
+  if (PHOTO_MIME_TYPES.includes(file.type)) return true;
+  // Algunos Android reportan las fotos HEIC sin tipo MIME: se acepta por
+  // extensión y el servidor valida el contenido real.
+  return /\.(heic|heif)$/i.test(file.name);
+}
 
 // Las fotos se previsualizan en local apenas se eligen y solo se suben al
 // servidor cuando el anuncio se guarda. La vista previa usa un data: URL
@@ -235,6 +250,8 @@ type AdminActivityEvent = {
   name?: string | null;
   email?: string | null;
   provider?: string;
+  ip?: string;
+  userAgent?: string;
   listingId?: number;
   title?: string;
   category?: string;
@@ -318,27 +335,109 @@ const money = new Intl.NumberFormat("es-PE", {
   maximumFractionDigits: 0,
 });
 
-function whatsappLink(listing: Listing, stay?: { checkIn: string; checkOut: string; guests: number }) {
+type StayRequest = { checkIn: string; checkOut: string; guests: number };
+
+function whatsappUrl(number: string, listing: Listing, stay?: StayRequest) {
   const stayDetails = listing.category === "Airbnb" && stay
     ? ` para llegar el ${formatShortDate(stay.checkIn)}, salir el ${formatShortDate(stay.checkOut)} y ${stay.guests} ${stay.guests === 1 ? "huésped" : "huéspedes"}`
     : "";
   const message = encodeURIComponent(
     `Hola ${listing.ownerName}, vi “${listing.title}” en ${BRAND} y me gustaría consultar disponibilidad${stayDetails}.`,
   );
-  return `https://wa.me/${listing.ownerWhatsApp}?text=${message}`;
+  return `https://wa.me/${number}?text=${message}`;
 }
 
 function listingImages(listing: Listing) {
   return Array.from(new Set([listing.image, ...(listing.gallery ?? [])].filter(Boolean)));
 }
 
-function trackInquiry(listingId: number) {
-  void fetch("/api/inquiries", {
+// El número del anunciante ya no viaja en claro en los listados: se registra
+// la consulta (POST /api/inquiries) y la respuesta trae el número completo.
+async function revealWhatsApp(listing: Listing, stay?: StayRequest): Promise<string> {
+  const response = await fetch("/api/inquiries", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ listingId, channel: "whatsapp" }),
-    keepalive: true,
+    body: JSON.stringify({
+      listingId: listing.id,
+      channel: "whatsapp",
+      checkIn: listing.category === "Airbnb" ? stay?.checkIn : undefined,
+      checkOut: listing.category === "Airbnb" ? stay?.checkOut : undefined,
+      guests: listing.category === "Airbnb" ? stay?.guests : undefined,
+    }),
   });
+  const payload = (await response.json().catch(() => ({}))) as { whatsapp?: string | null; error?: string };
+  if (!response.ok || !payload.whatsapp) {
+    throw new Error(payload.error ?? "No pudimos abrir el WhatsApp de este anuncio. Inténtalo otra vez.");
+  }
+  return payload.whatsapp;
+}
+
+// Abre una pestaña en el mismo gesto del usuario (para que el navegador no la
+// bloquee) y la apunta a WhatsApp cuando llega el número revelado.
+async function contactByWhatsApp(listing: Listing, stay?: StayRequest, onError?: (message: string) => void) {
+  const pendingWindow = window.open("about:blank", "_blank");
+  try {
+    const number = await revealWhatsApp(listing, stay);
+    const url = whatsappUrl(number, listing, stay);
+    if (pendingWindow && !pendingWindow.closed) {
+      pendingWindow.location.href = url;
+    } else {
+      window.location.assign(url);
+    }
+  } catch (error) {
+    pendingWindow?.close();
+    onError?.(error instanceof Error ? error.message : "No pudimos abrir WhatsApp. Inténtalo otra vez.");
+  }
+}
+
+function listingShareUrl(listing: Listing) {
+  const parameters = new URLSearchParams(window.location.search);
+  parameters.set("listing", String(listing.id));
+  return `${window.location.origin}${window.location.pathname}?${parameters.toString()}`;
+}
+
+async function copyListingLink(listing: Listing, notify: (message: string, tone?: "success" | "error") => void) {
+  const url = listingShareUrl(listing);
+  try {
+    await navigator.clipboard.writeText(url);
+    notify("Enlace copiado. Compártelo donde quieras.");
+  } catch {
+    // Sin permiso de portapapeles (HTTP plano o navegadores antiguos) se
+    // muestra el enlace para copiarlo a mano.
+    window.prompt("Copia el enlace del anuncio", url);
+  }
+}
+
+// «Compartir» usa la hoja nativa del teléfono (Web Share API) y, si no está
+// disponible, copia el enlace ?listing=ID del anuncio.
+async function shareListing(listing: Listing, notify: (message: string, tone?: "success" | "error") => void) {
+  const url = listingShareUrl(listing);
+  if (typeof navigator.share === "function") {
+    try {
+      await navigator.share({ title: `${listing.title} — ${BRAND}`, text: `Mira “${listing.title}” en ${BRAND}`, url });
+      return;
+    } catch (error) {
+      // Cancelar la hoja nativa no es un error; cualquier otro fallo cae al
+      // respaldo de copiar el enlace.
+      if (error instanceof DOMException && error.name === "AbortError") return;
+    }
+  }
+  await copyListingLink(listing, notify);
+}
+
+// Compartir el enlace del anuncio en Facebook (diálogo oficial para compartir
+// hacia la página o el perfil que elija el visitante).
+function shareListingOnFacebook(listing: Listing) {
+  const url = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(listingShareUrl(listing))}`;
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function ShareIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12M12 3 8 7m4-4 4 4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M6 11v8h12v-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+}
+
+function LinkIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.66 0l3-3A4 4 0 1 0 13 5.34l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3A4 4 0 1 0 11 18.66l1-1" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
 async function fetchListingById(id: number): Promise<Listing | null> {
@@ -357,9 +456,10 @@ function listingIdFromUrl() {
   return Number.isInteger(value) && value > 0 ? value : null;
 }
 
-// Botón de WhatsApp de las tarjetas y filas de favoritos. En los anuncios de
+// Botón de WhatsApp de las tarjetas y filas de favoritos. El número real se
+// revela recién al tocar (queda registrada la consulta); en los anuncios de
 // ejemplo se desactiva para que nadie escriba a números de demostración.
-function WhatsappCta({ listing, stay }: { listing: Listing; stay?: { checkIn: string; checkOut: string; guests: number } }) {
+function WhatsappCta({ listing, stay, notify }: { listing: Listing; stay?: StayRequest; notify?: (message: string, tone?: "success" | "error") => void }) {
   if (listing.isDemo) {
     return (
       <span
@@ -373,18 +473,73 @@ function WhatsappCta({ listing, stay }: { listing: Listing; stay?: { checkIn: st
     );
   }
   return (
-    <a
+    <button
+      type="button"
       className="whatsapp-card"
-      href={whatsappLink(listing, stay)}
-      onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }}
-      target="_blank"
-      rel="noreferrer"
+      onClick={(event) => {
+        event.stopPropagation();
+        void contactByWhatsApp(listing, stay, (message) => notify?.(message, "error"));
+      }}
       aria-label={`Contactar a ${listing.ownerName} por WhatsApp`}
       title={`Chatear con ${listing.ownerName} en WhatsApp`}
     >
       <WhatsappIcon />
       <span>WhatsApp</span>
-    </a>
+    </button>
+  );
+}
+
+const reportReasons: Array<{ value: string; label: string }> = [
+  { value: "spam", label: "Es spam o publicidad engañosa" },
+  { value: "alquilado", label: "Ya está alquilado u ocupado" },
+  { value: "numero_falso", label: "El número de contacto es falso" },
+  { value: "otro", label: "Otro motivo" },
+];
+
+// «Reportar anuncio»: guarda el reporte para que el administrador lo revise.
+function ReportListingSection({ listingId, notify }: { listingId: number; notify: (message: string, tone?: "success" | "error") => void }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("spam");
+  const [comment, setComment] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  async function submitReport() {
+    setIsSending(true);
+    try {
+      const response = await fetch("/api/reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listingId, reason, comment }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "No pudimos registrar el reporte");
+      setSent(true);
+      setOpen(false);
+      notify("Gracias por avisarnos. Revisaremos este anuncio.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "No pudimos registrar el reporte", "error");
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  if (sent) return <p className="report-thanks">Reporte enviado. Gracias por cuidar la comunidad.</p>;
+  return (
+    <div className="report-section">
+      {open ? (
+        <div className="report-form" role="group" aria-label="Reportar este anuncio">
+          <label>Motivo<select value={reason} onChange={(event) => setReason(event.target.value)}>{reportReasons.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+          <label>Cuéntanos más (opcional)<textarea rows={2} maxLength={500} value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Ej. Llamé y el número no existe" /></label>
+          <div className="report-actions">
+            <button type="button" className="text-action" onClick={() => setOpen(false)}>Cancelar</button>
+            <button type="button" className="dark-button" disabled={isSending} onClick={() => void submitReport()}>{isSending ? "Enviando…" : "Enviar reporte"}</button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className="report-link" onClick={() => setOpen(true)}>⚑ Reportar anuncio</button>
+      )}
+    </div>
   );
 }
 
@@ -554,10 +709,6 @@ function GoogleGIcon() {
       <path d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59A8.98 8.98 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58Z" fill="#EA4335" />
     </svg>
   );
-}
-
-function GlobeIcon() {
-  return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.7" /><path d="M3.5 12h17M12 3c3.5 3.6 3.5 14.4 0 18M12 3c-3.5 3.6-3.5 14.4 0 18" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>;
 }
 
 function LocationIcon() {
@@ -964,6 +1115,9 @@ function readInitialUrlState() {
     checkIn: dateValue(addDays(new Date(), 14)),
     checkOut: dateValue(addDays(new Date(), 15)),
     guests: 2,
+    privateBathroom: false,
+    servicesIncluded: false,
+    amenities: [] as StayAmenity[],
   };
   if (typeof window === "undefined") return defaults;
   const parameters = new URLSearchParams(window.location.search);
@@ -989,7 +1143,18 @@ function readInitialUrlState() {
     checkIn: requestedCheckIn && /^\d{4}-\d{2}-\d{2}$/.test(requestedCheckIn) ? requestedCheckIn : defaults.checkIn,
     checkOut: requestedCheckOut && /^\d{4}-\d{2}-\d{2}$/.test(requestedCheckOut) ? requestedCheckOut : defaults.checkOut,
     guests: Number.isInteger(requestedGuests) && requestedGuests >= 1 && requestedGuests <= 16 ? requestedGuests : defaults.guests,
+    privateBathroom: parameters.get("bathroom") === "Privado",
+    servicesIncluded: parameters.get("servicesIncluded") === "1",
+    amenities: (parameters.get("amenities") ?? "").split(",").filter((amenity): amenity is StayAmenity => stayAmenityOptions.includes(amenity as StayAmenity)),
   };
+}
+
+function cookieConsentAccepted() {
+  try {
+    return typeof window !== "undefined" && window.localStorage.getItem(COOKIE_CONSENT_STORAGE_KEY) === "accepted";
+  } catch {
+    return true;
+  }
 }
 
 export default function Home() {
@@ -1005,6 +1170,10 @@ export default function Home() {
   const [checkIn, setCheckIn] = useState(initialUrlState.checkIn);
   const [checkOut, setCheckOut] = useState(initialUrlState.checkOut);
   const [guestCount, setGuestCount] = useState(initialUrlState.guests);
+  // Filtros estructurados de Roomies y Estadías (details_json en el backend).
+  const [roomiePrivateBathroom, setRoomiePrivateBathroom] = useState(initialUrlState.privateBathroom);
+  const [roomieServicesIncluded, setRoomieServicesIncluded] = useState(initialUrlState.servicesIncluded);
+  const [stayAmenityFilters, setStayAmenityFilters] = useState<StayAmenity[]>(initialUrlState.amenities);
   const [showSearchOptions, setShowSearchOptions] = useState(false);
   const [showAirbnbCalendar, setShowAirbnbCalendar] = useState(false);
   const [showAirbnbGuests, setShowAirbnbGuests] = useState(false);
@@ -1041,6 +1210,16 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [noticeTone, setNoticeTone] = useState<"success" | "error">("success");
   const [showGoogleNudge, setShowGoogleNudge] = useState(false);
+  // Contenido real de «Quiénes somos», «Centro de ayuda» y lo legal (nada de
+  // avisos pasajeros), más el aviso de cookies de la Ley 29733.
+  const [showAbout, setShowAbout] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [showLegal, setShowLegal] = useState(false);
+  const [showCookieNotice, setShowCookieNotice] = useState(() => !cookieConsentAccepted());
+  // Token de «olvidé mi contraseña» que llega por enlace (?reset=TOKEN); se
+  // lee antes de que el efecto de filtros reescriba la URL.
+  const [passwordResetToken, setPasswordResetToken] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("reset"));
   // Si el visitante ya cerró el banner hace poco (localStorage) no se vuelve
   // a mostrar; en ese caso solo queda armado el recordatorio corto.
   const [welcomeNudgeDismissed, setWelcomeNudgeDismissed] = useState(welcomeNudgeRecentlyDismissed);
@@ -1094,6 +1273,11 @@ export default function Home() {
       parameters.set("checkIn", checkIn);
       parameters.set("checkOut", checkOut);
       parameters.set("guests", String(guestCount));
+      if (stayAmenityFilters.length) parameters.set("amenities", stayAmenityFilters.join(","));
+    }
+    if (activeCategory === "Roomies") {
+      if (roomiePrivateBathroom) parameters.set("bathroom", "Privado");
+      if (roomieServicesIncluded) parameters.set("servicesIncluded", "1");
     }
     // El detalle abierto (?listing=ID) se conserva para que la URL siga
     // siendo compartible; abrirlo y cerrarlo lo maneja el historial.
@@ -1101,7 +1285,7 @@ export default function Home() {
     if (openListingParameter) parameters.set("listing", openListingParameter);
     const query = parameters.toString();
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
-  }, [activeCategory, bedrooms, checkIn, checkOut, guestCount, maxPrice, minPrice, search, selectedDepaFeatures, service, sort]);
+  }, [activeCategory, bedrooms, checkIn, checkOut, guestCount, maxPrice, minPrice, roomiePrivateBathroom, roomieServicesIncluded, search, selectedDepaFeatures, service, sort, stayAmenityFilters]);
 
   const listingsQueryString = useMemo(() => {
     const parameters = new URLSearchParams({ category: activeCategory, pageSize: "24", sort });
@@ -1117,8 +1301,22 @@ export default function Home() {
     }
     if (activeCategory !== "Roomies" && activeCategory !== "Depas" && debouncedMaxPrice) parameters.set("maxPrice", debouncedMaxPrice);
     if (activeCategory === "Transporte" && service !== "Todos") parameters.set("service", service);
+    if (activeCategory === "Roomies") {
+      // Filtros estructurados sobre details_json en el servidor.
+      if (roomiePrivateBathroom) parameters.set("bathroom", "Privado");
+      if (roomieServicesIncluded) parameters.set("servicesIncluded", "1");
+    }
+    if (activeCategory === "Airbnb") {
+      // Fechas y huéspedes reales de la búsqueda: el servidor filtra por
+      // capacidad; sin calendario de disponibilidad, las fechas se validan y
+      // el anuncio se trata como siempre disponible.
+      parameters.set("checkIn", checkIn);
+      parameters.set("checkOut", checkOut);
+      parameters.set("guests", String(guestCount));
+      if (stayAmenityFilters.length) parameters.set("amenities", stayAmenityFilters.join(","));
+    }
     return parameters.toString();
-  }, [activeCategory, bedrooms, debouncedMaxPrice, debouncedMinPrice, debouncedSearch, selectedDepaFeatures, service, sort]);
+  }, [activeCategory, bedrooms, checkIn, checkOut, debouncedMaxPrice, debouncedMinPrice, debouncedSearch, guestCount, roomiePrivateBathroom, roomieServicesIncluded, selectedDepaFeatures, service, sort, stayAmenityFilters]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1186,6 +1384,13 @@ export default function Home() {
   // El acceso con Google por redirección vuelve a la portada con ?auth=…: el
   // parámetro se lee antes de que el efecto de filtros reescriba la URL y la
   // sesión ya viene en la cookie; aquí solo se avisa el resultado.
+  // Un enlace de recuperación (?reset=TOKEN) abre directo el formulario para
+  // definir la nueva contraseña.
+  useEffect(() => {
+    if (!passwordResetToken) return;
+    setShowLogin(true);
+  }, [passwordResetToken]);
+
   useEffect(() => {
     if (!oauthRedirectResult) return;
     const timer = window.setTimeout(() => {
@@ -1372,6 +1577,16 @@ export default function Home() {
         }
         if (!selectedDepaFeatures.every((feature) => details.features.includes(feature))) return false;
       }
+      if (activeCategory === "Roomies") {
+        // Réplica local de los filtros del servidor; un anuncio sin el dato
+        // estructurado solo se descarta cuando el filtro está activo.
+        if (roomiePrivateBathroom && listing.details?.bathroom !== "Privado") return false;
+        if (roomieServicesIncluded && !listing.details?.servicesIncluded) return false;
+      }
+      if (activeCategory === "Airbnb") {
+        if (stayAmenityFilters.length && !stayAmenityFilters.every((amenity) => listing.details?.amenities?.includes(amenity))) return false;
+        if (typeof listing.details?.guests === "number" && listing.details.guests < guestCount) return false;
+      }
       return true;
     });
 
@@ -1388,7 +1603,7 @@ export default function Home() {
     if (sort === "rating") return [...results].sort((left, right) => right.rating - left.rating || right.reviews - left.reviews);
     if (sort === "newest" && !hasDatabaseCategory) return [...results].sort((left, right) => right.id - left.id);
     return results;
-  }, [activeCategory, bedrooms, categoryListings, hasDatabaseCategory, maxPrice, minPrice, search, selectedDepaFeatures, service, sort]);
+  }, [activeCategory, bedrooms, categoryListings, guestCount, hasDatabaseCategory, maxPrice, minPrice, roomiePrivateBathroom, roomieServicesIncluded, search, selectedDepaFeatures, service, sort, stayAmenityFilters]);
 
   const resultsTotal = hasDatabaseCategory ? (listingsMeta?.total ?? visibleListings.length) : visibleListings.length;
   const isInitialListingsLoad = listingsStatus === "loading" && loadedCategory !== activeCategory;
@@ -1405,9 +1620,15 @@ export default function Home() {
   const singularNoun: Record<Category, string> = { Roomies: "habitación", Depas: "departamento", Airbnb: "alojamiento", Transporte: "servicio" };
   const filterButtonCount = activeCategory === "Depas"
     ? activeDepaFilterCount
-    : (maxPrice ? 1 : 0) + (activeCategory === "Transporte" && service !== "Todos" ? 1 : 0);
+    : (maxPrice ? 1 : 0)
+      + (activeCategory === "Transporte" && service !== "Todos" ? 1 : 0)
+      + (activeCategory === "Roomies" ? Number(roomiePrivateBathroom) + Number(roomieServicesIncluded) : 0)
+      + (activeCategory === "Airbnb" ? stayAmenityFilters.length : 0);
   const activeFilterChips: Array<{ key: string; label: string; clear: () => void }> = [];
   if (search.trim()) activeFilterChips.push({ key: "search", label: search.trim(), clear: () => setSearch("") });
+  if (activeCategory === "Roomies" && roomiePrivateBathroom) activeFilterChips.push({ key: "bathroom", label: "Baño privado", clear: () => setRoomiePrivateBathroom(false) });
+  if (activeCategory === "Roomies" && roomieServicesIncluded) activeFilterChips.push({ key: "services", label: "Servicios incluidos", clear: () => setRoomieServicesIncluded(false) });
+  if (activeCategory === "Airbnb") stayAmenityFilters.forEach((amenity) => activeFilterChips.push({ key: `amenity-${amenity}`, label: amenity, clear: () => toggleStayAmenity(amenity) }));
   if (bedrooms !== "Todos" && activeCategory === "Depas") activeFilterChips.push({ key: "bedrooms", label: bedroomSummary, clear: () => setBedrooms("Todos") });
   if ((minPrice || maxPrice) && activeCategory === "Depas") activeFilterChips.push({ key: "budget", label: budgetSummary, clear: () => { setMinPrice(""); setMaxPrice(""); } });
   if (maxPrice && activeCategory !== "Depas") activeFilterChips.push({ key: "budget", label: `Hasta S/ ${Number(maxPrice).toLocaleString("es-PE")}`, clear: () => setMaxPrice("") });
@@ -1441,6 +1662,9 @@ export default function Home() {
     setMaxPrice("");
     setBedrooms("Todos");
     setSelectedDepaFeatures([]);
+    setRoomiePrivateBathroom(false);
+    setRoomieServicesIncluded(false);
+    setStayAmenityFilters([]);
     setShowSearchOptions(false);
     setShowAirbnbCalendar(false);
     setShowAirbnbGuests(false);
@@ -1543,6 +1767,24 @@ export default function Home() {
     setService("Todos");
     setBedrooms("Todos");
     setSelectedDepaFeatures([]);
+    setRoomiePrivateBathroom(false);
+    setRoomieServicesIncluded(false);
+    setStayAmenityFilters([]);
+  }
+
+  function acceptCookies() {
+    setShowCookieNotice(false);
+    try {
+      window.localStorage.setItem(COOKIE_CONSENT_STORAGE_KEY, "accepted");
+    } catch {
+      // Sin localStorage (modo privado estricto) el aviso vuelve la próxima visita.
+    }
+  }
+
+  function toggleStayAmenity(amenity: StayAmenity) {
+    setStayAmenityFilters((current) => current.includes(amenity)
+      ? current.filter((item) => item !== amenity)
+      : [...current, amenity]);
   }
 
   function refreshListings() {
@@ -1722,7 +1964,6 @@ export default function Home() {
                 <span>Iniciar sesión</span>
               </button>
             )}
-            <button className="globe-button" aria-label="Idioma y moneda"><GlobeIcon /></button>
             <button className="menu-trigger" aria-label="Abrir menú" aria-expanded={showMenu} onClick={() => setShowMenu((open) => !open)}>
               <span className="hamburger"><i /><i /><i /></span>
             </button>
@@ -1841,7 +2082,8 @@ export default function Home() {
             <div className="menu-divider" />
             <span className="menu-section-label">Ayuda</span>
             <button onClick={openFiltersModal}>Filtros de búsqueda</button>
-            <button onClick={() => { flashNotice(`Soporte directo: ${SUPPORT_EMAIL}`); setShowMenu(false); }}>Centro de ayuda</button>
+            <button onClick={() => { setShowMenu(false); setShowHelp(true); }}>Centro de ayuda</button>
+            <button onClick={() => { setShowMenu(false); setShowAbout(true); }}>Quiénes somos</button>
           </div>
         )}
       </header>
@@ -1868,7 +2110,9 @@ export default function Home() {
             </div>
             <div className="results-actions">
               <label className="sort-control"><span>Ordenar por</span><select value={sort} onChange={(event) => setSort(event.target.value as ListingSort)} aria-label="Ordenar resultados">{sortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-              <button className={`toolbar-filter ${activeCategory === "Roomies" ? "mobile-only-filter" : ""}`} onClick={() => activeCategory === "Depas" ? openDepaFilters() : openFiltersModal()} aria-label={`Abrir filtros${filterButtonCount ? `, ${filterButtonCount} activos` : ""}`}><FilterIcon /><span>Filtros</span>{filterButtonCount > 0 && <b>{filterButtonCount}</b>}</button>
+              {/* Roomies ahora tiene filtros reales (baño privado, servicios
+                  incluidos): el botón se muestra también en escritorio. */}
+              <button className="toolbar-filter" onClick={() => activeCategory === "Depas" ? openDepaFilters() : openFiltersModal()} aria-label={`Abrir filtros${filterButtonCount ? `, ${filterButtonCount} activos` : ""}`}><FilterIcon /><span>Filtros</span>{filterButtonCount > 0 && <b>{filterButtonCount}</b>}</button>
             </div>
           </div>
 
@@ -1947,7 +2191,7 @@ export default function Home() {
                       </div>
                       <div className="depa-card-footer">
                         <div className="depa-feature-preview">{details.features.slice(0, 3).map((feature) => <span key={feature}>{feature}</span>)}</div>
-                        <WhatsappCta listing={listing} />
+                        <WhatsappCta listing={listing} notify={flashNotice} />
                       </div>
                     </div>;
                   })() : <div className="listing-copy">
@@ -1957,7 +2201,7 @@ export default function Home() {
                       <p className="listing-dates">{dateLabel}</p>
                       <div className="price-row">
                         <div><p><strong>{money.format(listing.price)}</strong> <span>{listing.priceLabel}</span></p><span className="cancellation-tag">{listing.isDemo ? "Anuncio de ejemplo" : "Contacto directo"}</span></div>
-                        <WhatsappCta listing={listing} />
+                        <WhatsappCta listing={listing} stay={listing.category === "Airbnb" ? { checkIn, checkOut, guests: guestCount } : undefined} notify={flashNotice} />
                       </div>
                     </div>}
                 </article>
@@ -1984,7 +2228,7 @@ export default function Home() {
 
       <footer className="footer">
         <div className="footer-top">
-          <div><strong>Asistencia</strong><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Centro de ayuda</button><button onClick={() => flashNotice("Próximamente: seguridad y confianza")}>Seguridad</button></div>
+          <div><strong>Asistencia</strong><button onClick={() => setShowHelp(true)}>Centro de ayuda</button><button onClick={() => setShowHelp(true)}>Seguridad</button></div>
           <div className="footer-publish-card">
             <strong>Publica</strong>
             <button className="footer-publish-primary" onClick={requestPublish}>Anuncia tu espacio</button>
@@ -1992,7 +2236,7 @@ export default function Home() {
           </div>
           <div>
             <strong>{BRAND}</strong>
-            <button onClick={() => flashNotice(`Muy pronto: conoce al equipo ${BRAND}`)}>Quiénes somos</button>
+            <button onClick={() => setShowAbout(true)}>Quiénes somos</button>
             {/* «Contacto» abre el WhatsApp del administrador del sitio; ya no
                 es un aviso pasajero. */}
             <a className="footer-link" href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer" title={`Escribir al WhatsApp de ${BRAND}`}>Contacto</a>
@@ -2003,8 +2247,24 @@ export default function Home() {
           <a className="social-link social-facebook" href={FACEBOOK_PAGE_URL} target="_blank" rel="noopener noreferrer" aria-label={`Facebook de ${BRAND}`} title={`Página oficial de Facebook de ${BRAND}`}><FacebookIcon /><span>Facebook</span></a>
           <a className="social-link social-whatsapp" href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer" aria-label={`Contacto por WhatsApp de ${BRAND}`} title={`Escribir al WhatsApp de ${BRAND}`}><WhatsappIcon /><span>Contacto</span></a>
         </div>
-        <div className="footer-bottom"><span>© 2026 {BRAND} · llaves365.com · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
+        <div className="footer-bottom">
+          <span>© 2026 {BRAND} · llaves365.com · <button className="footer-inline-link" onClick={() => setShowLegal(true)}>Privacidad</button> · <button className="footer-inline-link" onClick={() => setShowLegal(true)}>Términos</button></span>
+          <span>Español (PE) · S/ PEN</span>
+        </div>
       </footer>
+
+      {showCookieNotice && (
+        <div className="cookie-notice" role="region" aria-label="Aviso de cookies">
+          <p>
+            Usamos cookies propias para recordar tus favoritos y tu sesión. Conforme a la
+            Ley N.º 29733 de Protección de Datos Personales, al seguir navegando aceptas su uso.
+          </p>
+          <div className="cookie-notice-actions">
+            <button type="button" className="cookie-notice-more" onClick={() => setShowLegal(true)}>Más información</button>
+            <button type="button" className="cookie-notice-accept" onClick={acceptCookies}>Entendido</button>
+          </div>
+        </div>
+      )}
 
       <div className={`toast ${notice ? "visible" : ""} ${noticeTone === "error" ? "error" : ""}`} role={noticeTone === "error" ? "alert" : "status"} aria-live={noticeTone === "error" ? "assertive" : "polite"} aria-atomic="true"><span>{noticeTone === "error" ? "!" : "✓"}</span>{notice}</div>
 
@@ -2023,6 +2283,13 @@ export default function Home() {
             onToggleFeature={toggleDepaFeature}
           /> : <div className="filter-section"><h3>Presupuesto máximo</h3><div className="price-input"><span>S/</span><input type="number" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} placeholder="Sin límite" /></div></div>}
           {activeCategory === "Transporte" && <div className="filter-section"><h3>Tipo de servicio</h3><div className="modal-options">{["Todos", "Mudanza", "Corporativo"].map((item) => <button key={item} className={service === item ? "selected" : ""} onClick={() => setService(item)}>{item}</button>)}</div></div>}
+          {activeCategory === "Roomies" && <div className="filter-section"><h3>La habitación debe tener</h3><div className="modal-options">
+            <button className={roomiePrivateBathroom ? "selected" : ""} aria-pressed={roomiePrivateBathroom} onClick={() => setRoomiePrivateBathroom((current) => !current)}>Baño privado</button>
+            <button className={roomieServicesIncluded ? "selected" : ""} aria-pressed={roomieServicesIncluded} onClick={() => setRoomieServicesIncluded((current) => !current)}>Servicios incluidos</button>
+          </div></div>}
+          {activeCategory === "Airbnb" && <div className="filter-section"><h3>Comodidades</h3><div className="modal-options">
+            {stayAmenityOptions.map((amenity) => <button key={amenity} className={stayAmenityFilters.includes(amenity) ? "selected" : ""} aria-pressed={stayAmenityFilters.includes(amenity)} onClick={() => toggleStayAmenity(amenity)}>{amenity}</button>)}
+          </div></div>}
           <div className="modal-footer"><button className="text-action" onClick={resetFilters}>Limpiar todo</button><button className="dark-button" onClick={() => setShowFilters(false)}>Mostrar {visibleListings.length} resultados</button></div>
         </Modal>
       )}
@@ -2036,14 +2303,80 @@ export default function Home() {
         </Modal>
       )}
 
+      {showAbout && (
+        <Modal onClose={() => setShowAbout(false)} className="info-modal about-modal">
+          <div className="modal-header"><div><span className="modal-kicker">Conócenos</span><h2>Quiénes somos</h2></div><button className="close-button" onClick={() => setShowAbout(false)} aria-label="Cerrar quiénes somos">×</button></div>
+          <div className="info-content">
+            <p><strong>{BRAND}</strong> es un marketplace peruano de vivienda y servicios: habitaciones para compartir (Roomies), departamentos en alquiler mensual (Depas), alojamientos por noche (Estadías) y transporte para mudanzas o traslados corporativos.</p>
+            <p>Conectamos directamente a quien busca con quien publica: cada consulta se coordina por WhatsApp, sin comisiones por reserva ni intermediarios. Los anuncios se publican con un pago anual simple.</p>
+            <p>Operamos desde Lima para todo el Perú. Los anuncios marcados como «Ejemplo» son material de demostración y no corresponden a ofertas reales.</p>
+            <div className="info-contact">
+              <a href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer"><WhatsappIcon /> Escríbenos por WhatsApp ({CONTACT_WHATSAPP_DISPLAY})</a>
+              <a href={FACEBOOK_PAGE_URL} target="_blank" rel="noopener noreferrer"><FacebookIcon /> Síguenos en Facebook</a>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showHelp && (
+        <Modal onClose={() => setShowHelp(false)} className="info-modal help-modal">
+          <div className="modal-header"><div><span className="modal-kicker">Estamos para ayudarte</span><h2>Centro de ayuda</h2></div><button className="close-button" onClick={() => setShowHelp(false)} aria-label="Cerrar centro de ayuda">×</button></div>
+          <div className="info-content">
+            <h3>Preguntas frecuentes</h3>
+            <dl className="help-faq">
+              <dt>¿Cómo contacto a un anunciante?</dt>
+              <dd>Toca «WhatsApp» o «Contactar» en el anuncio: se abre un chat directo con la persona que publicó. {BRAND} no cobra comisión por ese contacto.</dd>
+              <dt>¿Cómo publico mi anuncio?</dt>
+              <dd>Entra con tu cuenta de Google, toca «Publicar un anuncio», completa los datos y agrega de 1 a 15 fotos. Los anuncios nuevos pasan por una revisión breve antes de aparecer publicados.</dd>
+              <dt>¿Cómo pauso o marco como alquilado mi anuncio?</dt>
+              <dd>En «Mis anuncios» puedes pausar, reanudar, marcar como alquilado o republicar cada anuncio cuando quieras.</dd>
+              <dt>¿Vi un anuncio sospechoso?</dt>
+              <dd>Ábrelo y usa «Reportar anuncio». Nuestro equipo lo revisa. Nunca pagues adelantos sin visitar el lugar y verificar a la persona.</dd>
+            </dl>
+            <h3>Consejos de seguridad</h3>
+            <ul className="help-tips">
+              <li>Coordina las visitas en horarios seguros y avisa a alguien de confianza.</li>
+              <li>Desconfía de precios demasiado bajos o de pedidos de depósito urgentes.</li>
+              <li>Verifica que el número de WhatsApp corresponda a la persona del anuncio.</li>
+            </ul>
+            <h3>¿Necesitas más ayuda?</h3>
+            <div className="info-contact">
+              <a href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer"><WhatsappIcon /> WhatsApp {CONTACT_WHATSAPP_DISPLAY}</a>
+              <a href={FACEBOOK_PAGE_URL} target="_blank" rel="noopener noreferrer"><FacebookIcon /> Facebook de {BRAND}</a>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showLegal && (
+        <Modal onClose={() => setShowLegal(false)} className="info-modal legal-modal">
+          <div className="modal-header"><div><span className="modal-kicker">Transparencia</span><h2>Privacidad y términos</h2></div><button className="close-button" onClick={() => setShowLegal(false)} aria-label="Cerrar privacidad y términos">×</button></div>
+          <div className="info-content">
+            <h3>Privacidad y datos personales (Ley N.º 29733)</h3>
+            <p>Tratamos tus datos conforme a la Ley N.º 29733 de Protección de Datos Personales del Perú. Guardamos solo lo necesario para operar el servicio: tu cuenta (nombre y correo), tus anuncios, tus favoritos y el registro de consultas.</p>
+            <p>Usamos cookies propias y almacenamiento local para mantener tu sesión, recordar tus favoritos y tus preferencias. No vendemos tus datos ni usamos cookies publicitarias de terceros.</p>
+            <p>Puedes pedir la actualización o eliminación de tus datos escribiéndonos por <a href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer">WhatsApp ({CONTACT_WHATSAPP_DISPLAY})</a>.</p>
+            <h3>Términos de uso</h3>
+            <ul className="help-tips">
+              <li>Cada anunciante es responsable de la veracidad de su anuncio y de la relación con los interesados.</li>
+              <li>{BRAND} conecta a las partes y no participa del contrato, pago ni garantía entre ellas.</li>
+              <li>Los anuncios que incumplan las reglas (spam, datos falsos, contenido engañoso) pueden pausarse o retirarse.</li>
+            </ul>
+          </div>
+        </Modal>
+      )}
+
       {showLogin && (
         <AuthModal
           user={currentUser}
-          onClose={() => { setShowLogin(false); setPublishAfterLogin(false); }}
+          resetToken={passwordResetToken}
+          onResetHandled={() => setPasswordResetToken(null)}
+          onClose={() => { setShowLogin(false); setPublishAfterLogin(false); setPasswordResetToken(null); }}
           onAuthenticated={authenticated}
           onLoggedOut={loggedOut}
           onOpenAdmin={() => { setShowLogin(false); setShowAdminPanel(true); }}
           onOpenMyListings={() => { setShowLogin(false); setShowMyListings(true); }}
+          notify={flashNotice}
         />
       )}
 
@@ -2085,7 +2418,7 @@ export default function Home() {
                       <p className="favorite-price"><strong>{money.format(listing.price)}</strong> <em>{listing.priceLabel}</em></p>
                     </div>
                     <div className="favorite-actions">
-                      <WhatsappCta listing={listing} />
+                      <WhatsappCta listing={listing} notify={flashNotice} />
                       <button className="favorite-remove" disabled={favoriteMutations.includes(listing.id)} onClick={(event) => { event.stopPropagation(); toggleFavorite(listing.id); }} aria-label={`Quitar ${listing.title} de favoritos`}>{favoriteMutations.includes(listing.id) ? "…" : "♥"}</button>
                     </div>
                   </article>
@@ -2099,7 +2432,19 @@ export default function Home() {
         </Modal>
       )}
 
-      {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => { setListingsFromDb((current) => [listing, ...current]); setActiveCategory(listing.category); setRetryListings((value) => value + 1); setShowPublish(false); flashNotice("Tu publicación fue guardada"); }} />}
+      {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => {
+        setShowPublish(false);
+        if (listing.status === "pending") {
+          // Los anuncios nuevos pasan por revisión: no aparecen en la lista
+          // pública hasta que el administrador los aprueba.
+          flashNotice("Tu anuncio se envió a revisión. Te avisaremos cuando esté publicado.");
+          return;
+        }
+        setListingsFromDb((current) => [listing, ...current]);
+        setActiveCategory(listing.category);
+        setRetryListings((value) => value + 1);
+        flashNotice("Tu publicación fue guardada");
+      }} />}
 
       {selectedListing && (
         <Modal onClose={closeListing} className="detail-modal">
@@ -2132,6 +2477,11 @@ export default function Home() {
           </div>
           <div className="detail-body">
             <div className="detail-title"><div><span className="modal-kicker">{categoryLabel(selectedListing.category)}</span><h2>{selectedListing.title}</h2></div>{selectedListing.isDemo ? <strong className="rating-note">Anuncio de ejemplo</strong> : selectedListing.reviews > 0 ? <strong>★ {selectedListing.rating.toFixed(1)} ({selectedListing.reviews})</strong> : <strong className="rating-note">Nuevo</strong>}</div>
+            <div className="share-row" aria-label="Compartir este anuncio">
+              <button type="button" onClick={() => void shareListing(selectedListing, flashNotice)}><ShareIcon /><span>Compartir</span></button>
+              <button type="button" onClick={() => void copyListingLink(selectedListing, flashNotice)}><LinkIcon /><span>Copiar enlace</span></button>
+              <button type="button" className="share-facebook" onClick={() => shareListingOnFacebook(selectedListing)} title={`Compartir en Facebook (página oficial: ${FACEBOOK_PAGE_URL})`}><FacebookIcon /><span>Facebook</span></button>
+            </div>
             <p className="detail-location">{selectedListing.category === "Depas" ? depaDetails(selectedListing).address : selectedListing.location}</p>
             <p className="detail-description">{selectedListing.description}</p>
             {selectedListing.category === "Depas" && (() => {
@@ -2147,7 +2497,8 @@ export default function Home() {
               <div className="detail-stay-total"><span>{money.format(selectedListing.price)} × {airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span><strong>{money.format(selectedListing.price * airbnbNights)}</strong></div>
             </div>}
             <div className="detail-benefits"><span>✓ Contacto directo con quien publica</span><span>✓ Coordinas por WhatsApp</span><span>✓ Sin comisiones</span></div>
-            <div className="detail-footer"><div><small>{selectedListing.category === "Depas" ? "Alquiler desde" : selectedListing.category === "Airbnb" ? `Total por ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}` : "Precio"}</small><strong>{selectedListing.category === "Airbnb" ? money.format(selectedListing.price * airbnbNights) : money.format(selectedListing.price)} {selectedListing.category !== "Airbnb" && <em>{selectedListing.priceLabel}</em>}</strong></div>{selectedListing.isDemo ? <button type="button" className="primary-button demo-cta" disabled title="Anuncio de ejemplo, sin contacto real">Anuncio de ejemplo</button> : <a className="primary-button" href={whatsappLink(selectedListing, { checkIn, checkOut, guests: guestCount })} onClick={() => trackInquiry(selectedListing.id)} target="_blank" rel="noreferrer">{selectedListing.category === "Airbnb" ? "Consultar disponibilidad" : "Contactar por WhatsApp"} <Icon>↗</Icon></a>}</div>
+            <div className="detail-footer"><div><small>{selectedListing.category === "Depas" ? "Alquiler desde" : selectedListing.category === "Airbnb" ? `Total por ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}` : "Precio"}</small><strong>{selectedListing.category === "Airbnb" ? money.format(selectedListing.price * airbnbNights) : money.format(selectedListing.price)} {selectedListing.category !== "Airbnb" && <em>{selectedListing.priceLabel}</em>}</strong></div>{selectedListing.isDemo ? <button type="button" className="primary-button demo-cta" disabled title="Anuncio de ejemplo, sin contacto real">Anuncio de ejemplo</button> : <button type="button" className="primary-button" onClick={() => void contactByWhatsApp(selectedListing, { checkIn, checkOut, guests: guestCount }, (message) => flashNotice(message, "error"))}>{selectedListing.category === "Airbnb" ? "Consultar disponibilidad" : "Contactar por WhatsApp"} <Icon>↗</Icon></button>}</div>
+            {!selectedListing.isDemo && <ReportListingSection listingId={selectedListing.id} notify={flashNotice} />}
           </div>
         </Modal>
       )}
@@ -2208,12 +2559,18 @@ function Modal({ children, onClose, className = "" }: { children: React.ReactNod
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeRef.current(); }}><div ref={dialogRef} className={`modal ${className}`} role="dialog" aria-modal="true" aria-label={`Ventana de ${BRAND}`} tabIndex={-1}>{children}</div></div>;
 }
 
-function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, onOpenMyListings }: { user: AuthUser | null; onClose: () => void; onAuthenticated: (user: AuthUser) => void; onLoggedOut: () => void; onOpenAdmin: () => void; onOpenMyListings: () => void }) {
+function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, onOpenMyListings, notify }: { user: AuthUser | null; resetToken?: string | null; onResetHandled?: () => void; onClose: () => void; onAuthenticated: (user: AuthUser) => void; onLoggedOut: () => void; onOpenAdmin: () => void; onOpenMyListings: () => void; notify?: (message: string, tone?: "success" | "error") => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [showPasswordAccess, setShowPasswordAccess] = useState(false);
+  // «Olvidé mi contraseña»: pedir el enlace y, si llegó ?reset=TOKEN, definir
+  // la nueva contraseña.
+  const [showForgotForm, setShowForgotForm] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotMessage, setForgotMessage] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [googleStatus, setGoogleStatus] = useState<"loading" | "ready" | "unavailable">("loading");
   const [googleMessage, setGoogleMessage] = useState("");
   const [googleRetry, setGoogleRetry] = useState(0);
@@ -2335,16 +2692,62 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
     }
   }
 
-  async function logout() {
+  async function logout(allDevices = false) {
     setIsSaving(true);
     setError("");
     try {
-      const response = await fetch("/api/auth/logout", { method: "POST" });
+      const response = await fetch(allDevices ? "/api/auth/logout-all" : "/api/auth/logout", { method: "POST" });
       if (!response.ok) throw new Error("No se pudo cerrar la sesión");
       window.google?.accounts.id.disableAutoSelect();
+      if (allDevices) notify?.("Cerramos tu sesión en todos los equipos.");
       onLoggedOut();
     } catch (logoutError) {
       setError(logoutError instanceof Error ? logoutError.message : "Inténtalo nuevamente.");
+      setIsSaving(false);
+    }
+  }
+
+  async function requestPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSaving(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/password/forgot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "No pudimos procesar la solicitud");
+      setForgotMessage(payload.message ?? "Si el correo existe, te escribimos con los pasos para recuperarla.");
+    } catch (forgotError) {
+      setError(forgotError instanceof Error ? forgotError.message : "Inténtalo nuevamente.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function submitNewPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!resetToken) return;
+    setIsSaving(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/password/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, password: newPassword }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { reset?: boolean; error?: string };
+      if (!response.ok || !payload.reset) throw new Error(payload.error ?? "No se pudo cambiar la contraseña");
+      notify?.("Contraseña actualizada. Ya puedes iniciar sesión.");
+      onResetHandled?.();
+      setShowPasswordAccess(true);
+      setMode("login");
+      setNewPassword("");
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : "El enlace no es válido o ya venció.");
+    } finally {
       setIsSaving(false);
     }
   }
@@ -2364,8 +2767,20 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
           {error && <p className="form-error">{error}</p>}
           {user.role === "admin" && <button className="primary-button account-button" onClick={onOpenAdmin}>Panel de administración <Icon>→</Icon></button>}
           <button className={`${user.role === "admin" ? "dark-button" : "primary-button"} account-button`} onClick={onOpenMyListings}>Mis anuncios <Icon>→</Icon></button>
-          <button className="text-action account-logout" disabled={isSaving} onClick={logout}>{isSaving ? "Cerrando…" : "Cerrar sesión"}</button>
+          <button className="text-action account-logout" disabled={isSaving} onClick={() => void logout()}>{isSaving ? "Cerrando…" : "Cerrar sesión"}</button>
+          <button className="text-action account-logout-all" disabled={isSaving} onClick={() => void logout(true)}>Cerrar sesión en todos los equipos</button>
         </div>
+      ) : resetToken ? (
+        <>
+          <h2>Crea tu nueva contraseña</h2>
+          <p>Define una contraseña nueva para tu cuenta. El enlace de recuperación vence a los 45 minutos.</p>
+          <form className="auth-form reset-form" onSubmit={submitNewPassword}>
+            <label>Nueva contraseña<input required minLength={8} maxLength={128} type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Mínimo 8 caracteres" /></label>
+            {error && <p className="form-error">{error}</p>}
+            <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Guardando…" : "Guardar contraseña"}<Icon>→</Icon></button>
+          </form>
+          <button className="text-action" onClick={() => onResetHandled?.()}>Volver al inicio de sesión</button>
+        </>
       ) : (
         <>
           <h2>Inicia sesión con Google</h2>
@@ -2412,15 +2827,31 @@ function AuthModal({ user, onClose, onAuthenticated, onLoggedOut, onOpenAdmin, o
           </button>
           {showPasswordAccess && <div className="password-access">
             <div className="auth-switch" role="group" aria-label="Tipo de acceso">
-              <button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }}>Ingresar</button>
-              <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }}>Crear cuenta</button>
+              <button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); setShowForgotForm(false); }}>Ingresar</button>
+              <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); setShowForgotForm(false); }}>Crear cuenta</button>
             </div>
-            <form className="auth-form" onSubmit={submit}>
-              {mode === "register" && <label>Nombre<input required minLength={2} maxLength={80} autoComplete="name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Tu nombre" /></label>}
-              <label>Correo electrónico<input required type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="tu@correo.com" /></label>
-              <label>Contraseña<input required minLength={8} maxLength={128} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Mínimo 8 caracteres" /></label>
-              <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Procesando…" : mode === "login" ? "Iniciar sesión" : "Crear mi cuenta"}<Icon>→</Icon></button>
-            </form>
+            {showForgotForm ? (
+              <div className="forgot-password">
+                {forgotMessage ? (
+                  <p className="forgot-message" role="status">{forgotMessage}</p>
+                ) : (
+                  <form className="auth-form" onSubmit={requestPasswordReset}>
+                    <p className="forgot-hint">Escribe tu correo y te contactamos con los pasos para recuperar tu contraseña.</p>
+                    <label>Correo electrónico<input required type="email" autoComplete="email" value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} placeholder="tu@correo.com" /></label>
+                    <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Enviando…" : "Recuperar contraseña"}<Icon>→</Icon></button>
+                  </form>
+                )}
+                <button type="button" className="text-action" onClick={() => { setShowForgotForm(false); setForgotMessage(""); setError(""); }}>Volver a ingresar</button>
+              </div>
+            ) : (
+              <form className="auth-form" onSubmit={submit}>
+                {mode === "register" && <label>Nombre<input required minLength={2} maxLength={80} autoComplete="name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Tu nombre" /></label>}
+                <label>Correo electrónico<input required type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="tu@correo.com" /></label>
+                <label>Contraseña<input required minLength={8} maxLength={128} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Mínimo 8 caracteres" /></label>
+                {mode === "login" && <button type="button" className="forgot-password-link" onClick={() => { setShowForgotForm(true); setError(""); }}>¿Olvidaste tu contraseña?</button>}
+                <button className="primary-button wide" disabled={isSaving}>{isSaving ? "Procesando…" : mode === "login" ? "Iniciar sesión" : "Crear mi cuenta"}<Icon>→</Icon></button>
+              </form>
+            )}
           </div>}
           <small>Al continuar aceptas nuestros términos de uso y política de privacidad.</small>
         </>
@@ -2490,8 +2921,8 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
       const preview = file.size <= MAX_PHOTO_BYTES ? await readPhotoPreview(file) : "";
       // Una foto inválida no se descarta en silencio: su casilla se queda en
       // la cuadrícula con el motivo, y las demás fotos válidas sí entran.
-      if (!PHOTO_MIME_TYPES.includes(file.type)) {
-        rejected.push({ id: photoIdRef.current, file, preview, error: "Formato no válido. Usa JPG, PNG o WebP." });
+      if (!isAcceptedPhoto(file)) {
+        rejected.push({ id: photoIdRef.current, file, preview, error: "Formato no válido. Usa JPG, PNG, WebP o HEIC (iPhone)." });
       } else if (file.size > MAX_PHOTO_BYTES) {
         rejected.push({ id: photoIdRef.current, file, preview, error: "Pesa más de 12 MB. Elige una versión más ligera." });
       } else if (!preview) {
@@ -2640,12 +3071,20 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
             ))}
             {photos.length < MAX_PUBLISH_PHOTOS && (
               <label className="photo-add-tile">
-                <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void addPhotos(event.target.files); event.target.value = ""; }} />
+                <input type="file" accept={PHOTO_ACCEPT} multiple onChange={(event) => { void addPhotos(event.target.files); event.target.value = ""; }} />
                 <span><b>+</b><small>Agregar fotos</small></span>
               </label>
             )}
+            {photos.length < MAX_PUBLISH_PHOTOS && (
+              // `capture` abre directo la cámara del teléfono; la casilla de
+              // arriba mantiene la galería para elegir fotos ya tomadas.
+              <label className="photo-add-tile photo-camera-tile">
+                <input type="file" accept={PHOTO_ACCEPT} capture="environment" onChange={(event) => { void addPhotos(event.target.files); event.target.value = ""; }} />
+                <span><b>📷</b><small>Usar cámara</small></span>
+              </label>
+            )}
           </div>
-          <small className="photo-hint">De 1 a {MAX_PUBLISH_PHOTOS} fotos JPG, PNG o WebP (máximo 12 MB cada una). Se muestran aquí al instante y se suben recién cuando tocas «Guardar y publicar». La primera es la portada: toca otra foto para hacerla portada.</small>
+          <small className="photo-hint">De 1 a {MAX_PUBLISH_PHOTOS} fotos JPG, PNG, WebP o HEIC del iPhone (máximo 12 MB cada una; las HEIC se convierten a JPEG al subirlas). Se muestran aquí al instante y se suben recién cuando tocas «Guardar y publicar». La primera es la portada: toca otra foto para hacerla portada.</small>
         </div>
         {error && <p className="form-error">{error}</p>}
         <button className="primary-button wide" disabled={isSaving}>{isSaving ? (publishStep === "photos" ? "Preparando fotos…" : "Publicando…") : "Guardar y publicar"}<Icon>→</Icon></button>
@@ -2708,12 +3147,13 @@ function usePanelData<T>(url: string) {
 }
 
 function AdminPanelModal({ onClose, onListingsChanged, notify }: { onClose: () => void; onListingsChanged: () => void; notify: (message: string, tone?: "success" | "error") => void }) {
-  const [tab, setTab] = useState<"overview" | "activity" | "listings" | "inquiries" | "users">("overview");
+  const [tab, setTab] = useState<"overview" | "activity" | "listings" | "inquiries" | "reports" | "users">("overview");
   const tabs = [
     { id: "overview" as const, label: "Resumen" },
     { id: "activity" as const, label: "Actividad" },
     { id: "listings" as const, label: "Anuncios" },
     { id: "inquiries" as const, label: "Consultas" },
+    { id: "reports" as const, label: "Reportes" },
     { id: "users" as const, label: "Usuarios" },
   ];
 
@@ -2727,6 +3167,7 @@ function AdminPanelModal({ onClose, onListingsChanged, notify }: { onClose: () =
       {tab === "activity" && <AdminActivityTab />}
       {tab === "listings" && <ListingManager mode="admin" onChanged={onListingsChanged} notify={notify} />}
       {tab === "inquiries" && <AdminInquiriesTab />}
+      {tab === "reports" && <AdminReportsTab />}
       {tab === "users" && <AdminUsersTab />}
     </Modal>
   );
@@ -2788,14 +3229,20 @@ function AdminInquiriesTab() {
 }
 
 function AdminActivityTab() {
-  const { data, status, error } = usePanelData<{ events: AdminActivityEvent[] }>("/api/admin/activity");
+  const { data, status, error } = usePanelData<{ events: AdminActivityEvent[]; today?: { logins: number; newListings: number } }>("/api/admin/activity");
   if (status === "loading") return <p className="panel-note">Cargando actividad…</p>;
   if (status === "error" || !data) return <p className="form-error">{error || "No se pudo cargar la actividad"}</p>;
-  if (!data.events.length) return <p className="panel-note">Todavía no hay actividad registrada.</p>;
 
   return (
     <div className="admin-section">
+      {data.today && (
+        <div className="stat-grid activity-today">
+          <div className="stat-card"><strong>{data.today.logins}</strong><span>Accesos hoy</span></div>
+          <div className="stat-card"><strong>{data.today.newListings}</strong><span>Anuncios nuevos hoy</span></div>
+        </div>
+      )}
       <h3>Actividad reciente</h3>
+      {!data.events.length ? <p className="panel-note">Todavía no hay actividad registrada.</p> : (
       <ul className="activity-feed">
         {data.events.map((event) => (
           <li key={event.id} className={event.type === "login" ? "activity-login" : "activity-listing"}>
@@ -2805,6 +3252,7 @@ function AdminActivityTab() {
                 <>
                   <strong>{event.name || event.email} inició sesión</strong>
                   <small>{event.email} · {providerLabel(event.provider)}</small>
+                  {(event.ip || event.userAgent) && <small className="activity-device">{[event.ip, event.userAgent].filter(Boolean).join(" · ")}</small>}
                 </>
               ) : (
                 <>
@@ -2817,18 +3265,78 @@ function AdminActivityTab() {
           </li>
         ))}
       </ul>
+      )}
+    </div>
+  );
+}
+
+type AdminReportRow = {
+  id: number;
+  listingId: number;
+  title: string;
+  category: string;
+  status?: string;
+  reason: string;
+  comment?: string;
+  createdAt: string;
+};
+
+const reportReasonLabels: Record<string, string> = {
+  spam: "Spam",
+  alquilado: "Ya alquilado",
+  numero_falso: "Número falso",
+  otro: "Otro",
+};
+
+function AdminReportsTab() {
+  const { data, status, error } = usePanelData<{ recent: AdminReportRow[]; byListing: Array<{ id: number; title: string; category: string; total: number }> }>("/api/admin/reports");
+  if (status === "loading") return <p className="panel-note">Cargando reportes…</p>;
+  if (status === "error" || !data) return <p className="form-error">{error || "No se pudieron cargar los reportes"}</p>;
+  if (!data.recent.length) return <p className="panel-note">Todavía no hay anuncios reportados.</p>;
+
+  return (
+    <div className="admin-section">
+      {data.byListing.length > 0 && <>
+        <h3>Anuncios más reportados</h3>
+        <ul className="admin-list">
+          {data.byListing.map((row) => <li key={row.id}><span>{row.title} <small>· {categoryLabel(row.category)}</small></span><b>{row.total}</b></li>)}
+        </ul>
+      </>}
+      <h3>Últimos reportes</h3>
+      <ul className="admin-list">
+        {data.recent.map((row) => (
+          <li key={row.id}>
+            <span>
+              {row.title} <small>· {reportReasonLabels[row.reason] ?? row.reason}</small>
+              {row.comment && <small>“{row.comment}”</small>}
+            </span>
+            <b>{formatAdminDate(row.createdAt)}</b>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
 
 function AdminUsersTab() {
-  const { data, status, error } = usePanelData<{ users: AdminUserRow[]; total?: number }>("/api/admin/users");
-  if (status === "loading") return <p className="panel-note">Cargando usuarios…</p>;
-  if (status === "error" || !data) return <p className="form-error">{error || "No se pudieron cargar los usuarios"}</p>;
-  if (!data.users.length) return <p className="panel-note">Todavía no hay cuentas registradas.</p>;
+  // Búsqueda y paginación reales: ya no hay un tope fijo de 200 cuentas.
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const query = new URLSearchParams({ page: String(page), pageSize: "25" });
+  if (debouncedSearch.trim()) query.set("q", debouncedSearch.trim());
+  const { data, status, error } = usePanelData<{ users: AdminUserRow[]; total?: number; meta?: { totalPages: number; page: number } }>(`/api/admin/users?${query.toString()}`);
+  if (status === "error") return <p className="form-error">{error || "No se pudieron cargar los usuarios"}</p>;
 
   return (
     <div className="admin-section">
+      <label className="admin-user-search">
+        <span className="sr-only">Buscar cuentas</span>
+        <input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Buscar por nombre o correo" />
+      </label>
+      {status === "loading" || !data ? <p className="panel-note">Cargando usuarios…</p> : !data.users.length ? (
+        <p className="panel-note">{debouncedSearch.trim() ? "No encontramos cuentas con esa búsqueda." : "Todavía no hay cuentas registradas."}</p>
+      ) : <>
       <h3>Cuentas registradas ({data.total ?? data.users.length}{(data.total ?? 0) > data.users.length ? ` · mostrando ${data.users.length}` : ""})</h3>
       <ul className="admin-list user-list">
         {data.users.map((user) => {
@@ -2855,8 +3363,40 @@ function AdminUsersTab() {
           );
         })}
       </ul>
+      {data.meta && data.meta.totalPages > 1 && (
+        <div className="manage-pagination">
+          <button disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Anterior</button>
+          <span>Página {page} de {data.meta.totalPages}</span>
+          <button disabled={page >= data.meta.totalPages} onClick={() => setPage((value) => value + 1)}>Siguiente</button>
+        </div>
+      )}
+      </>}
     </div>
   );
+}
+
+// Estados del ciclo de vida del anuncio, tal como los guarda el backend.
+const listingStatusLabels: Record<string, string> = {
+  published: "Publicado",
+  paused: "Pausado",
+  rented: "Alquilado",
+  pending: "En revisión",
+  rejected: "Rechazado",
+};
+
+function statusActionsFor(status: string, isAdmin: boolean): Array<{ status: string; label: string }> {
+  const actions: Array<{ status: string; label: string }> = [];
+  if (status === "published") {
+    actions.push({ status: "paused", label: "Pausar" }, { status: "rented", label: "Marcar alquilado" });
+  } else if (status === "paused") {
+    actions.push({ status: "published", label: "Reanudar" }, { status: "rented", label: "Marcar alquilado" });
+  } else if (status === "rented") {
+    actions.push({ status: "published", label: "Republicar" });
+  } else if (isAdmin && (status === "pending" || status === "rejected")) {
+    actions.push({ status: "published", label: "Aprobar" });
+    if (status === "pending") actions.push({ status: "rejected", label: "Rechazar" });
+  }
+  return actions;
 }
 
 function ListingManager({ mode, onChanged, notify }: { mode: "admin" | "mine"; onChanged: () => void; notify: (message: string, tone?: "success" | "error") => void }) {
@@ -2869,12 +3409,16 @@ function ListingManager({ mode, onChanged, notify }: { mode: "admin" | "mine"; o
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<OwnedListing | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  // El administrador puede separar anuncios reales de los de demostración.
+  const [originFilter, setOriginFilter] = useState<"" | "real" | "demo">("");
 
   useEffect(() => {
     const controller = new AbortController();
     setStatus("loading");
     setError("");
-    const url = isAdmin ? `/api/admin/listings?page=${page}&pageSize=8` : "/api/my/listings";
+    const url = isAdmin
+      ? `/api/admin/listings?page=${page}&pageSize=8${originFilter ? `&origin=${originFilter}` : ""}`
+      : "/api/my/listings";
     fetch(url, { signal: controller.signal, cache: "no-store" })
       .then(async (response) => {
         const payload = (await response.json()) as { listings?: OwnedListing[]; meta?: { total: number; totalPages: number }; error?: string };
@@ -2899,7 +3443,27 @@ function ListingManager({ mode, onChanged, notify }: { mode: "admin" | "mine"; o
         setError(requestError instanceof Error ? requestError.message : "No se pudieron cargar los anuncios");
       });
     return () => controller.abort();
-  }, [isAdmin, page, reload]);
+  }, [isAdmin, originFilter, page, reload]);
+
+  async function changeStatus(listing: OwnedListing, nextStatus: string, successMessage: string) {
+    setBusyId(listing.id);
+    try {
+      const response = await fetch(`/api/listings/${listing.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      const payload = (await response.json()) as { listing?: OwnedListing; error?: string };
+      if (!response.ok || !payload.listing) throw new Error(payload.error ?? "No se pudo cambiar el estado");
+      setItems((current) => current.map((item) => item.id === listing.id ? { ...item, status: payload.listing?.status } : item));
+      notify(successMessage);
+      onChanged();
+    } catch (statusError) {
+      notify(statusError instanceof Error ? statusError.message : "No se pudo cambiar el estado", "error");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   async function removeListing(listing: OwnedListing) {
     if (!window.confirm(`¿Eliminar “${listing.title}”? Esta acción no se puede deshacer.`)) return;
@@ -2920,11 +3484,19 @@ function ListingManager({ mode, onChanged, notify }: { mode: "admin" | "mine"; o
 
   if (status === "loading" && !items.length) return <p className="panel-note">Cargando anuncios…</p>;
   if (status === "error") return <p className="form-error">{error}</p>;
-  if (!items.length) return <p className="panel-note">{isAdmin ? "Todavía no hay anuncios publicados." : "Todavía no publicaste ningún anuncio. Usa “Publicar un anuncio” para crear el primero."}</p>;
 
   return (
     <div className="admin-section">
-      {editing ? (
+      {isAdmin && !editing && (
+        <div className="admin-origin-filter" role="group" aria-label="Filtrar anuncios por origen">
+          {([["", "Todos"], ["real", "Reales"], ["demo", "Ejemplo"]] as const).map(([value, label]) => (
+            <button key={value || "all"} className={originFilter === value ? "active" : ""} aria-pressed={originFilter === value} onClick={() => { setOriginFilter(value); setPage(1); }}>{label}</button>
+          ))}
+        </div>
+      )}
+      {!items.length ? (
+        <p className="panel-note">{isAdmin ? "No hay anuncios con ese filtro." : "Todavía no publicaste ningún anuncio. Usa “Publicar un anuncio” para crear el primero."}</p>
+      ) : editing ? (
         <EditListingForm
           listing={editing}
           isAdmin={isAdmin}
@@ -2943,7 +3515,11 @@ function ListingManager({ mode, onChanged, notify }: { mode: "admin" | "mine"; o
               <li key={listing.id}>
                 <img src={imageUrl(listing.image, 180)} alt="" loading="lazy" />
                 <div>
-                  <strong>{listing.title}</strong>
+                  <strong>
+                    {listing.title}
+                    <i className={`status-chip status-${listing.status ?? "published"}`}>{listingStatusLabels[listing.status ?? "published"] ?? listing.status}</i>
+                    {isAdmin && listing.isDemo && <i className="status-chip status-demo">Ejemplo</i>}
+                  </strong>
                   <span>{categoryLabel(listing.category)} · {money.format(listing.price)} {listing.priceLabel}</span>
                   <small>
                     {formatAdminDate(listing.createdAt)}
@@ -2951,8 +3527,20 @@ function ListingManager({ mode, onChanged, notify }: { mode: "admin" | "mine"; o
                     {typeof listing.inquiries === "number" ? ` · ${listing.inquiries} ${listing.inquiries === 1 ? "contacto" : "contactos"}` : ""}
                     {typeof listing.favorites === "number" ? ` · ${listing.favorites} favoritos` : ""}
                   </small>
+                  {!isAdmin && listing.status === "pending" && <small className="status-note">En revisión: se publica cuando el administrador lo aprueba.</small>}
+                  {!isAdmin && listing.status === "rejected" && <small className="status-note">Rechazado por el administrador. Escríbenos si crees que es un error.</small>}
                 </div>
                 <div className="manage-actions">
+                  {statusActionsFor(listing.status ?? "published", isAdmin).map((action) => (
+                    <button
+                      key={action.status + action.label}
+                      className="text-action"
+                      disabled={busyId === listing.id}
+                      onClick={() => changeStatus(listing, action.status, `Anuncio ${listingStatusLabels[action.status]?.toLowerCase() ?? "actualizado"}`)}
+                    >
+                      {action.label}
+                    </button>
+                  ))}
                   <button className="text-action" onClick={() => setEditing(listing)}>Editar</button>
                   <button className="danger-action" disabled={busyId === listing.id} onClick={() => removeListing(listing)}>{busyId === listing.id ? "Eliminando…" : "Eliminar"}</button>
                 </div>
