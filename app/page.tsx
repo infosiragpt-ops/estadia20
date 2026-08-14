@@ -20,6 +20,11 @@ import {
 const BRAND = "Llaves365";
 const BRAND_MARK = "llaves365";
 const SUPPORT_EMAIL = "hola@estadia20.com";
+// Canales oficiales del sitio: la página de Facebook de Llaves365 y el
+// WhatsApp del administrador (celular de Perú). «Contacto» siempre abre este
+// WhatsApp con un saludo corto ya escrito.
+const FACEBOOK_PAGE_URL = "https://www.facebook.com/profile.php?id=61592602154789";
+const CONTACT_WHATSAPP_URL = `https://wa.me/51918714054?text=${encodeURIComponent("Hola, les escribo desde llaves365.com")}`;
 
 const categories: Array<{ id: Category; label: string; short: string }> = [
   { id: "Roomies", label: "Roomies", short: "Habitaciones" },
@@ -557,6 +562,10 @@ function GlobeIcon() {
 
 function LocationIcon() {
   return <svg aria-hidden="true" viewBox="0 0 48 48"><path d="M8 17 24 6l16 11v25H8z" fill="#eeeeea" stroke="#7c7c75" strokeWidth="1.5" /><path d="M6 18 24 5l18 13" fill="none" stroke="#373737" strokeWidth="2.3" strokeLinecap="round" /><rect x="19" y="22" width="12" height="20" rx="1" fill="#ec315d" /><circle cx="28" cy="32" r="1.2" fill="#fff" /><path d="M7 42h34" stroke="#373737" strokeWidth="2" /></svg>;
+}
+
+function FacebookIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24"><path fill="currentColor" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07c0 6.02 4.39 11.02 10.13 11.93v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.7 4.53-4.7 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.26h3.33l-.53 3.49h-2.8V24C19.61 23.09 24 18.09 24 12.07" /></svg>;
 }
 
 function WhatsappIcon() {
@@ -1981,7 +1990,18 @@ export default function Home() {
             <button className="footer-publish-primary" onClick={requestPublish}>Anuncia tu espacio</button>
             <button className="footer-publish-secondary" onClick={openPlans}>Planes anuales</button>
           </div>
-          <div><strong>{BRAND}</strong><button onClick={() => flashNotice(`Muy pronto: conoce al equipo ${BRAND}`)}>Quiénes somos</button><button onClick={() => flashNotice(`Soporte: ${SUPPORT_EMAIL}`)}>Contacto</button></div>
+          <div>
+            <strong>{BRAND}</strong>
+            <button onClick={() => flashNotice(`Muy pronto: conoce al equipo ${BRAND}`)}>Quiénes somos</button>
+            {/* «Contacto» abre el WhatsApp del administrador del sitio; ya no
+                es un aviso pasajero. */}
+            <a className="footer-link" href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer" title={`Escribir al WhatsApp de ${BRAND}`}>Contacto</a>
+            <a className="footer-link" href={FACEBOOK_PAGE_URL} target="_blank" rel="noopener noreferrer" aria-label={`Facebook de ${BRAND}`}>Facebook</a>
+          </div>
+        </div>
+        <div className="footer-social" aria-label={`Canales oficiales de ${BRAND}`}>
+          <a className="social-link social-facebook" href={FACEBOOK_PAGE_URL} target="_blank" rel="noopener noreferrer" aria-label={`Facebook de ${BRAND}`} title={`Página oficial de Facebook de ${BRAND}`}><FacebookIcon /><span>Facebook</span></a>
+          <a className="social-link social-whatsapp" href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer" aria-label={`Contacto por WhatsApp de ${BRAND}`} title={`Escribir al WhatsApp de ${BRAND}`}><WhatsappIcon /><span>Contacto</span></a>
         </div>
         <div className="footer-bottom"><span>© 2026 {BRAND} · llaves365.com · Privacidad · Términos</span><span>Español (PE) · S/ PEN</span></div>
       </footer>
