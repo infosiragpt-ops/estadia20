@@ -22,6 +22,7 @@ import sqlite3
 import sys
 import threading
 import time
+import shutil
 import unicodedata
 import uuid
 from datetime import date
@@ -74,7 +75,17 @@ OAUTH_REDIRECT_HOSTS = frozenset(
     if host.strip()
 )
 OAUTH_DEFAULT_HOST = "llaves365.com"
+# URL pública canónica del sitio: alimenta el sitemap y robots.txt.
+SITE_BASE_URL = os.environ.get("LLAVES365_BASE_URL", "https://llaves365.com").rstrip("/")
+# Cadena de versión para /api/health; el despliegue puede inyectarla con
+# ESTADIA20_RELEASE (por ejemplo, el SHA del commit).
+RELEASE_VERSION = os.environ.get(
+    "ESTADIA20_RELEASE", os.environ.get("LLAVES365_RELEASE", "dev")
+).strip() or "dev"
 PASSWORD_ITERATIONS = 310_000
+# Los tokens de «olvidé mi contraseña» viven 45 minutos y se guardan con hash;
+# el token en claro solo se registra en los logs del servidor (no hay SMTP aún).
+PASSWORD_RESET_TTL_SECONDS = 45 * 60
 # Cada foto original puede pesar hasta 12 MB; el servidor la redimensiona a un
 # tamaño profesional (máx. 1600×1200) antes de guardarla, así el archivo final
 # queda mucho más liviano.
@@ -101,7 +112,25 @@ IMAGE_TYPES = {
     "image/png": "png",
     "image/webp": "webp",
     "image/gif": "gif",
+    # Fotos del iPhone: se convierten a JPEG con pillow-heif al subirlas. Si el
+    # servidor no puede decodificarlas, esa foto falla con un mensaje claro en
+    # español en lugar de guardar un original que el navegador no muestra.
+    "image/heic": "heic",
+    "image/heif": "heic",
 }
+HEIC_MESSAGE = (
+    "Tu foto está en formato HEIC (iPhone) y no pudimos convertirla. "
+    "En tu iPhone activa Ajustes → Cámara → Formatos → Más compatible "
+    "para enviar JPEG, o elige otra foto."
+)
+# Ciclo de vida del anuncio. Los anuncios existentes y los de demostración
+# quedan «published»; los nuevos anuncios de usuarios no administradores nacen
+# «pending» hasta que el administrador los apruebe.
+LISTING_STATUSES = {"published", "paused", "rented", "pending", "rejected"}
+# El dueño puede pausar, reanudar, marcar alquilado o republicar; aprobar un
+# anuncio pendiente o rechazado es exclusivo del administrador.
+OWNER_STATUS_CHOICES = {"published", "paused", "rented"}
+REPORT_REASONS = {"spam", "alquilado", "numero_falso", "otro"}
 DEPA_FEATURES = {
     "Amoblado",
     "Permite mascotas",
@@ -135,8 +164,14 @@ RATE_LIMIT_RULES = {
     ("POST", "/api/favorites"): (60, 60),
     ("DELETE", "/api/favorites"): (60, 60),
     ("POST", "/api/inquiries"): (20, 60),
+    ("POST", "/api/reports"): (10, 3600),
+    ("POST", "/api/auth/password/forgot"): (5, 900),
+    ("POST", "/api/auth/password/reset"): (10, 900),
     ("PATCH", "/api/listings"): (30, 3600),
     ("DELETE", "/api/listings"): (30, 3600),
+    # Límite de lectura moderado para frenar el raspado masivo de anuncios sin
+    # afectar la navegación normal (la lista pagina de a 24 y cachea con ETag).
+    ("GET", "/api/listings"): (240, 60),
 }
 _RATE_LIMIT_BUCKETS: dict[tuple[str, str, str], deque[float]] = defaultdict(deque)
 _RATE_LIMIT_LOCK = threading.Lock()
@@ -410,6 +445,31 @@ def initialize_database() -> None:
             database.execute(
                 "ALTER TABLE listings ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'"
             )
+        # Ciclo de vida: los anuncios ya publicados (y los de demostración)
+        # conservan «published»; solo los anuncios nuevos de usuarios no
+        # administradores entran como «pending».
+        if "status" not in listing_columns:
+            database.execute(
+                "ALTER TABLE listings ADD COLUMN status TEXT NOT NULL DEFAULT 'published'"
+            )
+        if "updated_at" not in listing_columns:
+            database.execute("ALTER TABLE listings ADD COLUMN updated_at TEXT")
+        database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_listings_status ON listings (status)"
+        )
+        inquiry_columns = {
+            row["name"] for row in database.execute("PRAGMA table_info(inquiries)")
+        }
+        inquiry_migrations = {
+            "message": "ALTER TABLE inquiries ADD COLUMN message TEXT NOT NULL DEFAULT ''",
+            "check_in": "ALTER TABLE inquiries ADD COLUMN check_in TEXT",
+            "check_out": "ALTER TABLE inquiries ADD COLUMN check_out TEXT",
+            "guests": "ALTER TABLE inquiries ADD COLUMN guests INTEGER",
+            "user_id": "ALTER TABLE inquiries ADD COLUMN user_id INTEGER REFERENCES users(id)",
+        }
+        for column, migration in inquiry_migrations.items():
+            if column not in inquiry_columns:
+                database.execute(migration)
         user_columns = {
             row["name"] for row in database.execute("PRAGMA table_info(users)")
         }
@@ -440,8 +500,51 @@ def initialize_database() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_login_events_created_at
               ON login_events (created_at DESC, id DESC);
+            CREATE TABLE IF NOT EXISTS uploads (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              path TEXT NOT NULL UNIQUE,
+              listing_id INTEGER REFERENCES listings(id) ON DELETE SET NULL,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_uploads_user_created_at
+              ON uploads (user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_uploads_listing
+              ON uploads (listing_id);
+            CREATE TABLE IF NOT EXISTS password_resets (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              token_hash TEXT NOT NULL UNIQUE,
+              expires_at INTEGER NOT NULL,
+              used_at TEXT,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_password_resets_user
+              ON password_resets (user_id, expires_at);
+            CREATE TABLE IF NOT EXISTS reports (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              visitor_id TEXT NOT NULL,
+              listing_id INTEGER NOT NULL,
+              reason TEXT NOT NULL,
+              comment TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_reports_listing_created_at
+              ON reports (listing_id, created_at);
             """
         )
+        login_event_columns = {
+            row["name"] for row in database.execute("PRAGMA table_info(login_events)")
+        }
+        login_event_migrations = {
+            "ip": "ALTER TABLE login_events ADD COLUMN ip TEXT NOT NULL DEFAULT ''",
+            "user_agent": (
+                "ALTER TABLE login_events ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''"
+            ),
+        }
+        for column, migration in login_event_migrations.items():
+            if column not in login_event_columns:
+                database.execute(migration)
         database.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub
@@ -578,7 +681,13 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-def record_login(database: sqlite3.Connection, user_id: int, provider: str) -> None:
+def record_login(
+    database: sqlite3.Connection,
+    user_id: int,
+    provider: str,
+    ip: str = "",
+    user_agent: str = "",
+) -> None:
     """Guarda el último acceso del usuario y lo agrega al historial de actividad."""
     database.execute(
         """
@@ -589,8 +698,8 @@ def record_login(database: sqlite3.Connection, user_id: int, provider: str) -> N
         (provider, user_id),
     )
     database.execute(
-        "INSERT INTO login_events (user_id, provider) VALUES (?, ?)",
-        (user_id, provider),
+        "INSERT INTO login_events (user_id, provider, ip, user_agent) VALUES (?, ?, ?, ?)",
+        (user_id, provider, ip[:64], user_agent[:200]),
     )
     # El historial es para el panel del administrador; basta con lo reciente.
     database.execute(
@@ -689,7 +798,28 @@ class GoogleAccountError(Exception):
         self.status = status
 
 
-def listing_dict(row: sqlite3.Row) -> dict[str, object]:
+def masked_whatsapp(number: object) -> str:
+    """Oculta el número de WhatsApp en las respuestas públicas: se conservan
+    el prefijo del país y los últimos dos dígitos (ej. 519•••••••77)."""
+    digits = re.sub(r"\D", "", str(number or ""))
+    if len(digits) <= 5:
+        return "•" * len(digits)
+    return f"{digits[:3]}{'•' * (len(digits) - 5)}{digits[-2:]}"
+
+
+def normalize_peru_whatsapp(value: object) -> str | None:
+    """Valida y normaliza un celular peruano: 9 dígitos que empiezan con 9,
+    guardado siempre como 51XXXXXXXXX. Acepta «9XXXXXXXX», «519XXXXXXXX» y
+    variantes con espacios, guiones o el prefijo +."""
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) == 9 and digits.startswith("9"):
+        return f"51{digits}"
+    if len(digits) == 11 and digits.startswith("519"):
+        return digits
+    return None
+
+
+def listing_dict(row: sqlite3.Row, include_contact: bool = False) -> dict[str, object]:
     try:
         gallery = json.loads(row["gallery"])
     except (json.JSONDecodeError, TypeError):
@@ -713,9 +843,16 @@ def listing_dict(row: sqlite3.Row) -> dict[str, object]:
         "meta": row["meta"],
         "badge": row["badge"],
         "ownerName": row["owner_name"],
-        "ownerWhatsApp": row["owner_whatsapp"],
+        # El número completo solo viaja al dueño del anuncio o al administrador.
+        # Los visitantes reciben una versión enmascarada y obtienen el número
+        # real recién al registrar la consulta (POST /api/inquiries).
+        "ownerWhatsApp": (
+            row["owner_whatsapp"] if include_contact else masked_whatsapp(row["owner_whatsapp"])
+        ),
+        "ownerWhatsAppMasked": not include_contact,
         "service": row["service"],
         "details": details,
+        "status": row["status"],
         # Los anuncios sembrados como demostración no pertenecen a ningún
         # usuario (user_id NULL); la interfaz los marca como «Ejemplo» para no
         # presentarlos como anuncios reales.
@@ -724,8 +861,9 @@ def listing_dict(row: sqlite3.Row) -> dict[str, object]:
 
 
 def owned_listing_dict(row: sqlite3.Row) -> dict[str, object]:
-    data = listing_dict(row)
+    data = listing_dict(row, include_contact=True)
     data["createdAt"] = row["created_at"]
+    data["updatedAt"] = row["updated_at"]
     data["inquiries"] = row["inquiry_count"]
     data["favorites"] = row["favorite_count"]
     return data
@@ -871,6 +1009,9 @@ def extract_multipart_files(
     return files
 
 
+HEIC_BRANDS = {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"}
+
+
 def image_extension_from_content(content: bytes) -> str | None:
     if content.startswith(b"\xff\xd8\xff"):
         return "jpg"
@@ -880,6 +1021,9 @@ def image_extension_from_content(content: bytes) -> str | None:
         return "webp"
     if content.startswith((b"GIF87a", b"GIF89a")):
         return "gif"
+    # Contenedor ISO BMFF con marca HEIC/HEIF (fotos de iPhone).
+    if len(content) >= 12 and content[4:8] == b"ftyp" and content[8:12] in HEIC_BRANDS:
+        return "heic"
     return None
 
 
@@ -896,12 +1040,29 @@ def load_pillow():
     return Image, ImageOps
 
 
+def enable_heic_support() -> bool:
+    """Registra el decodificador HEIC de pillow-heif (si está instalado) para
+    que Pillow pueda abrir fotos de iPhone. Devuelve True si quedó activo."""
+    if GOOGLE_VENDOR_DIR.is_dir() and str(GOOGLE_VENDOR_DIR) not in sys.path:
+        sys.path.insert(0, str(GOOGLE_VENDOR_DIR))
+    try:
+        from pillow_heif import register_heif_opener
+    except ImportError:
+        return False
+    register_heif_opener()
+    return True
+
+
 def process_upload_image(content: bytes, extension: str) -> tuple[bytes, str]:
     """Redimensiona la foto a un tamaño profesional: entra en 1600×1200 sin
     agrandar imágenes pequeñas, se convierte a JPEG progresivo (o WebP si ya
     era WebP) y se eliminan los metadatos EXIF. Si Pillow no está disponible
-    se conserva el archivo original."""
+    se conserva el archivo original, salvo HEIC: una foto HEIC que no se puede
+    convertir falla con un mensaje claro en vez de guardar un original que los
+    navegadores no muestran."""
     pillow = load_pillow()
+    if extension == "heic" and (pillow is None or not enable_heic_support()):
+        raise ValueError(HEIC_MESSAGE)
     if pillow is None:
         return content, extension
     image_module, image_ops = pillow
@@ -910,6 +1071,8 @@ def process_upload_image(content: bytes, extension: str) -> tuple[bytes, str]:
             source.load()
             image = image_ops.exif_transpose(source)
     except Exception as error:
+        if extension == "heic":
+            raise ValueError(HEIC_MESSAGE) from error
         raise ValueError("La imagen está dañada o no se pudo procesar") from error
     # thumbnail() encaja dentro del máximo manteniendo proporción y nunca
     # agranda una imagen más pequeña que el límite.
@@ -927,6 +1090,53 @@ def process_upload_image(content: bytes, extension: str) -> tuple[bytes, str]:
         image = image.convert("RGB")
     image.save(output, format="JPEG", quality=PHOTO_QUALITY, progressive=True, optimize=True)
     return output.getvalue(), "jpg"
+
+
+def upload_file_path(url: str) -> Path | None:
+    """Convierte una URL /api/uploads/… en la ruta segura del archivo en
+    disco, o None si no corresponde a una foto subida."""
+    if not url.startswith("/api/uploads/"):
+        return None
+    relative = unquote(url.removeprefix("/api/uploads/")).strip("/")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}/[A-Za-z0-9-]+\.(jpg|png|webp|gif)", relative):
+        return None
+    file_path = (UPLOADS_DIR / relative).resolve()
+    if UPLOADS_DIR.resolve() not in file_path.parents:
+        return None
+    return file_path
+
+
+def delete_upload_files(urls: list[str]) -> None:
+    """Borra del disco las fotos subidas de un anuncio (mejor esfuerzo)."""
+    for url in urls:
+        file_path = upload_file_path(str(url))
+        if file_path is None:
+            continue
+        try:
+            file_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def cleanup_orphan_uploads(user_id: int) -> None:
+    """Limpieza de mejor esfuerzo: borra las fotos que este usuario subió hace
+    más de un día y nunca adjuntó a un anuncio (archivo y registro)."""
+    with connect() as database:
+        rows = database.execute(
+            """
+            SELECT id, path FROM uploads
+            WHERE user_id = ? AND listing_id IS NULL
+              AND created_at < datetime('now', '-1 day')
+            """,
+            (user_id,),
+        ).fetchall()
+        if not rows:
+            return
+        delete_upload_files([row["path"] for row in rows])
+        database.execute(
+            f"DELETE FROM uploads WHERE id IN ({','.join('?' for _ in rows)})",
+            [row["id"] for row in rows],
+        )
 
 
 def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row], dict[str, object]]:
@@ -963,6 +1173,31 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
     if any(feature not in DEPA_FEATURES for feature in requested_features):
         raise ValueError("Característica inválida")
 
+    # Filtros de Roomies sobre details_json estructurado (nada de LIKE).
+    bathroom = str(parameters.get("bathroom", [""])[0]).strip()
+    if bathroom and bathroom not in ROOMIE_BATHROOM_OPTIONS:
+        raise ValueError("Filtro de baño inválido")
+    services_included = str(parameters.get("servicesIncluded", [""])[0]).strip().lower()
+    if services_included and services_included not in {"1", "true", "si", "sí"}:
+        raise ValueError("Filtro de servicios inválido")
+
+    # Filtros de Estadías: comodidades y búsqueda con fechas y huéspedes.
+    requested_amenities = [
+        amenity.strip()
+        for amenity in str(parameters.get("amenities", [""])[0]).split(",")
+        if amenity.strip()
+    ]
+    if any(amenity not in STAY_AMENITIES for amenity in requested_amenities):
+        raise ValueError("Comodidad inválida")
+    check_in = str(parameters.get("checkIn", [""])[0]).strip()
+    check_out = str(parameters.get("checkOut", [""])[0]).strip()
+    for stay_date in (check_in, check_out):
+        if stay_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", stay_date):
+            raise ValueError("Fecha inválida")
+    if check_in and check_out and check_out <= check_in:
+        raise ValueError("La salida debe ser posterior a la llegada")
+    guests = optional_integer(parameters.get("guests", [None])[0], 1, 16)
+
     page = optional_integer(parameters.get("page", ["1"])[0], 1, 10_000) or 1
     page_size = optional_integer(parameters.get("pageSize", ["12"])[0], 1, 48) or 12
     sort = str(parameters.get("sort", ["recommended"])[0]).strip()
@@ -970,7 +1205,9 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
     if sort not in LISTING_SORTS:
         raise ValueError("Orden inválido")
 
-    clauses: list[str] = []
+    # Solo los anuncios publicados son visibles en la lista pública; los
+    # pendientes, pausados, alquilados o rechazados no aparecen.
+    clauses: list[str] = ["status = 'published'"]
     values: list[object] = []
     if category:
         clauses.append("category = ?")
@@ -985,22 +1222,67 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
         clauses.append("service = ?")
         values.append(service)
     if bedrooms is not None:
-        bedroom_expression = (
-            "CASE WHEN json_valid(details_json) "
-            "THEN CAST(json_extract(details_json, '$.bedroomsMax') AS INTEGER) ELSE 0 END"
+        # El filtro de dormitorios usa bedroomsMin/Max (Depas) o bedrooms
+        # (Estadías / Roomies) cuando el campo existe; un anuncio sin ese dato
+        # no se oculta: solo se filtra cuando hay una restricción real.
+        maximum_expression = (
+            "CASE WHEN json_valid(details_json) THEN COALESCE("
+            "json_extract(details_json, '$.bedroomsMax'), "
+            "json_extract(details_json, '$.bedrooms')) END"
         )
-        clauses.append(f"{bedroom_expression} >= ?")
+        minimum_expression = (
+            "CASE WHEN json_valid(details_json) THEN COALESCE("
+            "json_extract(details_json, '$.bedroomsMin'), "
+            "json_extract(details_json, '$.bedrooms')) END"
+        )
+        clauses.append(
+            f"({maximum_expression} IS NULL OR CAST({maximum_expression} AS INTEGER) >= ?)"
+        )
         values.append(bedrooms)
         if bedrooms_value != "4+":
-            minimum_expression = (
-                "CASE WHEN json_valid(details_json) "
-                "THEN CAST(json_extract(details_json, '$.bedroomsMin') AS INTEGER) ELSE 0 END"
+            clauses.append(
+                f"({minimum_expression} IS NULL OR CAST({minimum_expression} AS INTEGER) <= ?)"
             )
-            clauses.append(f"{minimum_expression} <= ?")
             values.append(bedrooms)
     for feature in requested_features:
-        clauses.append("details_json LIKE ?")
-        values.append(f'%"{feature}"%')
+        # Coincidencia estructurada dentro del arreglo JSON de características.
+        clauses.append(
+            "(json_valid(details_json) AND EXISTS ("
+            "SELECT 1 FROM json_each(details_json, '$.features') "
+            "WHERE json_each.value = ?))"
+        )
+        values.append(feature)
+    if bathroom:
+        clauses.append(
+            "(json_valid(details_json) "
+            "AND json_extract(details_json, '$.bathroom') = ?)"
+        )
+        values.append(bathroom)
+    if services_included:
+        clauses.append(
+            "(json_valid(details_json) "
+            "AND CAST(json_extract(details_json, '$.servicesIncluded') AS INTEGER) = 1)"
+        )
+    for amenity in requested_amenities:
+        clauses.append(
+            "(json_valid(details_json) AND EXISTS ("
+            "SELECT 1 FROM json_each(details_json, '$.amenities') "
+            "WHERE json_each.value = ?))"
+        )
+        values.append(amenity)
+    if guests is not None and category == "Airbnb":
+        # Capacidad real de la estadía. Un anuncio sin el dato (por ejemplo,
+        # los de demostración) no se oculta. Los anuncios no guardan un
+        # calendario de disponibilidad, así que checkIn/checkOut se validan y
+        # se tratan como «siempre disponible» hasta que exista ese dato.
+        guests_expression = (
+            "CASE WHEN json_valid(details_json) "
+            "THEN json_extract(details_json, '$.guests') END"
+        )
+        clauses.append(
+            f"({guests_expression} IS NULL OR CAST({guests_expression} AS INTEGER) >= ?)"
+        )
+        values.append(guests)
 
     searchable_expression = (
         "search_normalize(title || ' ' || location || ' ' || description || ' ' || "
@@ -1017,7 +1299,8 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
     offset = (page - 1) * page_size
     with connect() as database:
         category_total = database.execute(
-            "SELECT COUNT(*) FROM listings" + (" WHERE category = ?" if category else ""),
+            "SELECT COUNT(*) FROM listings WHERE status = 'published'"
+            + (" AND category = ?" if category else ""),
             (category,) if category else (),
         ).fetchone()[0]
         total = database.execute(
@@ -1374,13 +1657,33 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             try:
                 with connect() as database:
                     database.execute("SELECT 1").fetchone()
-                self.send_json({"ok": True, "database": True})
             except sqlite3.Error:
                 self.send_api_error(
                     "La base de datos no está disponible.",
                     HTTPStatus.SERVICE_UNAVAILABLE,
                     "database_unavailable",
                 )
+                return
+            uploads_usable = False
+            uploads_free_bytes = 0
+            try:
+                UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+                uploads_free_bytes = shutil.disk_usage(UPLOADS_DIR).free
+                uploads_usable = (
+                    os.access(UPLOADS_DIR, os.W_OK)
+                    and uploads_free_bytes > 64 * 1024 * 1024
+                )
+            except OSError:
+                uploads_usable = False
+            self.send_json(
+                {
+                    "ok": True,
+                    "database": True,
+                    "uploads": uploads_usable,
+                    "uploadsFreeBytes": uploads_free_bytes,
+                    "version": RELEASE_VERSION,
+                }
+            )
             return
         if parsed.path == "/api/auth/config":
             self.send_json(
@@ -1399,6 +1702,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             self.send_redirect("/", HTTPStatus.FOUND, clear_oauth_state=True)
             return
         if parsed.path == "/api/listings":
+            # Límite de lectura moderado compartido entre la lista y el
+            # detalle: reduce el raspado masivo sin frenar la navegación.
+            if not self.check_rate_limit("GET", "/api/listings"):
+                return
             try:
                 rows, metadata = listings_query(parse_qs(parsed.query, keep_blank_values=True))
             except ValueError as error:
@@ -1419,7 +1726,12 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             return
         listing_match = re.fullmatch(r"/api/listings/(\d{1,10})", parsed.path)
         if listing_match:
+            if not self.check_rate_limit("GET", "/api/listings"):
+                return
             self.get_listing(int(listing_match.group(1)))
+            return
+        if parsed.path == "/api/inquiries":
+            self.list_inquiries(parse_qs(parsed.query, keep_blank_values=True))
             return
         if parsed.path == "/api/auth/me":
             user = self.authenticated_user()
@@ -1470,6 +1782,12 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/"):
             self.send_api_error("Ruta no encontrada.", HTTPStatus.NOT_FOUND, "not_found")
             return
+        if parsed.path == "/sitemap.xml":
+            self.serve_sitemap()
+            return
+        if parsed.path == "/robots.txt":
+            self.serve_robots()
+            return
         self.serve_static(parsed.path)
 
     def require_admin(self) -> sqlite3.Row | None:
@@ -1489,7 +1807,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
     def get_listing(self, listing_id: int) -> None:
         """Detalle público de un anuncio (GET /api/listings/{id}), con la
         misma forma que un elemento del listado: alimenta los enlaces
-        compartidos del tipo /?listing=ID."""
+        compartidos del tipo /?listing=ID. El número de WhatsApp viaja
+        enmascarado salvo para el dueño del anuncio o el administrador."""
         with connect() as database:
             row = database.execute(
                 "SELECT * FROM listings WHERE id = ?", (listing_id,)
@@ -1501,7 +1820,23 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 "listing_not_found",
             )
             return
-        payload = {"listing": listing_dict(row)}
+        user = self.authenticated_user()
+        is_privileged = user is not None and (
+            user["role"] == "admin" or row["user_id"] == user["id"]
+        )
+        if row["status"] != "published" and not is_privileged:
+            # Un anuncio pausado, alquilado, pendiente o rechazado no es
+            # visible con el enlace compartido; solo su dueño o el admin.
+            self.send_api_error(
+                "La publicación ya no está disponible.",
+                HTTPStatus.NOT_FOUND,
+                "listing_not_found",
+            )
+            return
+        payload = {"listing": listing_dict(row, include_contact=is_privileged)}
+        if is_privileged:
+            self.send_json(payload)
+            return
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         etag = f'"{hashlib.sha256(serialized).hexdigest()[:24]}"'
         self.send_json(
@@ -1529,6 +1864,114 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             ).fetchall()
         self.send_json({"listings": [owned_listing_dict(row) for row in rows]})
 
+    def list_inquiries(self, parameters: dict[str, list[str]]) -> None:
+        """Consultas recibidas por los anuncios del usuario con sesión (o de
+        cualquier anuncio para el administrador). Incluye mensaje y fechas."""
+        user = self.require_user()
+        if user is None:
+            return
+        try:
+            listing_id = optional_integer(
+                parameters.get("listingId", [None])[0], 1, 2_000_000_000
+            )
+        except ValueError:
+            self.send_api_error(
+                "Publicación inválida.", HTTPStatus.BAD_REQUEST, "invalid_listing"
+            )
+            return
+        clauses = []
+        values: list[object] = []
+        if user["role"] != "admin":
+            clauses.append("listings.user_id = ?")
+            values.append(user["id"])
+        if listing_id is not None:
+            clauses.append("inquiries.listing_id = ?")
+            values.append(listing_id)
+        where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with connect() as database:
+            rows = database.execute(
+                f"""
+                SELECT inquiries.id, inquiries.listing_id, inquiries.channel,
+                       inquiries.message, inquiries.check_in, inquiries.check_out,
+                       inquiries.guests, inquiries.created_at,
+                       listings.title, listings.category
+                FROM inquiries JOIN listings ON listings.id = inquiries.listing_id
+                {where_clause}
+                ORDER BY inquiries.created_at DESC, inquiries.id DESC
+                LIMIT 100
+                """,
+                values,
+            ).fetchall()
+        self.send_json(
+            {
+                "inquiries": [
+                    {
+                        "id": row["id"],
+                        "listingId": row["listing_id"],
+                        "title": row["title"],
+                        "category": row["category"],
+                        "channel": row["channel"],
+                        "message": row["message"],
+                        "checkIn": row["check_in"],
+                        "checkOut": row["check_out"],
+                        "guests": row["guests"],
+                        "createdAt": row["created_at"],
+                    }
+                    for row in rows
+                ]
+            }
+        )
+
+    def serve_sitemap(self) -> None:
+        """Mapa del sitio real: portada, categorías públicas y cada anuncio
+        publicado con su enlace compartible (?listing=ID)."""
+        with connect() as database:
+            rows = database.execute(
+                """
+                SELECT id, COALESCE(updated_at, created_at) AS last_modified
+                FROM listings WHERE status = 'published'
+                ORDER BY id
+                LIMIT 5000
+                """
+            ).fetchall()
+        entries = [f"<url><loc>{SITE_BASE_URL}/</loc></url>"]
+        for public_name in ("Roomies", "Depas", "Estad%C3%ADas", "Transporte"):
+            entries.append(
+                f"<url><loc>{SITE_BASE_URL}/?category={public_name}</loc></url>"
+            )
+        for row in rows:
+            last_modified = str(row["last_modified"] or "")[:10]
+            lastmod = f"<lastmod>{last_modified}</lastmod>" if last_modified else ""
+            entries.append(
+                f"<url><loc>{SITE_BASE_URL}/?listing={row['id']}</loc>{lastmod}</url>"
+            )
+        body = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            + "".join(entries)
+            + "</urlset>\n"
+        ).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/xml; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_robots(self) -> None:
+        body = (
+            "User-agent: *\n"
+            "Allow: /api/uploads/\n"
+            "Disallow: /api/\n"
+            f"Sitemap: {SITE_BASE_URL}/sitemap.xml\n"
+        ).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(body)
+
     def handle_admin_get(self, parsed) -> None:
         if self.require_admin() is None:
             return
@@ -1537,11 +1980,13 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/admin/listings":
             self.admin_listings(parse_qs(parsed.query, keep_blank_values=True))
         elif parsed.path == "/api/admin/users":
-            self.admin_users()
+            self.admin_users(parse_qs(parsed.query, keep_blank_values=True))
         elif parsed.path == "/api/admin/inquiries":
             self.admin_inquiries()
         elif parsed.path == "/api/admin/activity":
             self.admin_activity()
+        elif parsed.path == "/api/admin/reports":
+            self.admin_reports()
         else:
             self.send_api_error("Ruta no encontrada.", HTTPStatus.NOT_FOUND, "not_found")
 
@@ -1619,12 +2064,28 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_api_error("Paginación inválida.", HTTPStatus.BAD_REQUEST, "invalid_filters")
             return
+        status_filter = str(parameters.get("status", [""])[0]).strip()
+        if status_filter and status_filter not in LISTING_STATUSES:
+            self.send_api_error("Estado inválido.", HTTPStatus.BAD_REQUEST, "invalid_filters")
+            return
+        # Separa anuncios reales (con dueño) de los sembrados de demostración.
+        origin_filter = str(parameters.get("origin", [""])[0]).strip()
+        if origin_filter and origin_filter not in {"demo", "real"}:
+            self.send_api_error("Filtro inválido.", HTTPStatus.BAD_REQUEST, "invalid_filters")
+            return
         query_text = str(parameters.get("q", [""])[0]).strip()[:120]
         clauses: list[str] = []
         values: list[object] = []
         if category:
             clauses.append("listings.category = ?")
             values.append(category)
+        if status_filter:
+            clauses.append("listings.status = ?")
+            values.append(status_filter)
+        if origin_filter == "demo":
+            clauses.append("listings.user_id IS NULL")
+        elif origin_filter == "real":
+            clauses.append("listings.user_id IS NOT NULL")
         if query_text:
             clauses.append(
                 "search_matches(search_normalize(listings.title || ' ' || "
@@ -1666,20 +2127,41 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             }
         )
 
-    def admin_users(self) -> None:
+    def admin_users(self, parameters: dict[str, list[str]] | None = None) -> None:
+        parameters = parameters or {}
+        try:
+            page = optional_integer(parameters.get("page", ["1"])[0], 1, 10_000) or 1
+            page_size = optional_integer(parameters.get("pageSize", ["25"])[0], 1, 100) or 25
+        except ValueError:
+            self.send_api_error("Paginación inválida.", HTTPStatus.BAD_REQUEST, "invalid_filters")
+            return
+        query_text = str(parameters.get("q", [""])[0]).strip()[:120]
+        clauses: list[str] = []
+        values: list[object] = []
+        if query_text:
+            clauses.append(
+                "search_matches(search_normalize(users.name || ' ' || users.email), ?) = 1"
+            )
+            values.append(normalize_search_text(query_text))
+        where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        offset = (page - 1) * page_size
         with connect() as database:
-            users_total = database.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            users_total = database.execute(
+                f"SELECT COUNT(*) FROM users{where_clause}", values
+            ).fetchone()[0]
             rows = database.execute(
-                """
+                f"""
                 SELECT users.id, users.name, users.email, users.auth_provider,
                        users.role, users.created_at, users.last_login_at,
                        users.last_login_provider,
                        (SELECT COUNT(*) FROM listings
                         WHERE listings.user_id = users.id) AS listing_count
                 FROM users
+                {where_clause}
                 ORDER BY users.last_login_at DESC, users.created_at DESC, users.id DESC
-                LIMIT 200
-                """
+                LIMIT ? OFFSET ?
+                """,
+                [*values, page_size, offset],
             ).fetchall()
             category_rows = database.execute(
                 """
@@ -1692,9 +2174,17 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         listings_by_user: dict[int, dict[str, int]] = defaultdict(dict)
         for row in category_rows:
             listings_by_user[row["user_id"]][row["category"]] = row["total"]
+        total_pages = max(1, math.ceil(users_total / page_size))
         self.send_json(
             {
                 "total": users_total,
+                "meta": {
+                    "total": users_total,
+                    "page": page,
+                    "pageSize": page_size,
+                    "totalPages": total_pages,
+                    "hasMore": page < total_pages,
+                },
                 "users": [
                     {
                         "id": row["id"],
@@ -1717,8 +2207,9 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         with connect() as database:
             login_rows = database.execute(
                 """
-                SELECT login_events.id, login_events.provider,
-                       login_events.created_at, users.name, users.email
+                SELECT login_events.id, login_events.provider, login_events.ip,
+                       login_events.user_agent, login_events.created_at,
+                       users.name, users.email
                 FROM login_events JOIN users ON users.id = login_events.user_id
                 ORDER BY login_events.created_at DESC, login_events.id DESC
                 LIMIT 60
@@ -1734,6 +2225,12 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 LIMIT 60
                 """
             ).fetchall()
+            logins_today = database.execute(
+                "SELECT COUNT(*) FROM login_events WHERE created_at >= date('now')"
+            ).fetchone()[0]
+            listings_today = database.execute(
+                "SELECT COUNT(*) FROM listings WHERE created_at >= date('now')"
+            ).fetchone()[0]
         events: list[dict[str, object]] = []
         for row in login_rows:
             events.append(
@@ -1743,6 +2240,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     "name": row["name"],
                     "email": row["email"],
                     "provider": row["provider"],
+                    "ip": row["ip"],
+                    "userAgent": row["user_agent"],
                     "createdAt": row["created_at"],
                 }
             )
@@ -1760,7 +2259,61 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 }
             )
         events.sort(key=lambda event: str(event["createdAt"]), reverse=True)
-        self.send_json({"events": events[:80]})
+        self.send_json(
+            {
+                "events": events[:80],
+                "today": {"logins": logins_today, "newListings": listings_today},
+            }
+        )
+
+    def admin_reports(self) -> None:
+        with connect() as database:
+            recent = database.execute(
+                """
+                SELECT reports.id, reports.listing_id, reports.reason,
+                       reports.comment, reports.created_at,
+                       listings.title, listings.category, listings.status
+                FROM reports JOIN listings ON listings.id = reports.listing_id
+                ORDER BY reports.created_at DESC, reports.id DESC
+                LIMIT 100
+                """
+            ).fetchall()
+            by_listing = database.execute(
+                """
+                SELECT listings.id, listings.title, listings.category,
+                       COUNT(reports.id) AS total
+                FROM reports JOIN listings ON listings.id = reports.listing_id
+                GROUP BY reports.listing_id
+                ORDER BY total DESC, listings.id DESC
+                LIMIT 20
+                """
+            ).fetchall()
+        self.send_json(
+            {
+                "recent": [
+                    {
+                        "id": row["id"],
+                        "listingId": row["listing_id"],
+                        "title": row["title"],
+                        "category": row["category"],
+                        "status": row["status"],
+                        "reason": row["reason"],
+                        "comment": row["comment"],
+                        "createdAt": row["created_at"],
+                    }
+                    for row in recent
+                ],
+                "byListing": [
+                    {
+                        "id": row["id"],
+                        "title": row["title"],
+                        "category": row["category"],
+                        "total": row["total"],
+                    }
+                    for row in by_listing
+                ],
+            }
+        )
 
     def admin_inquiries(self) -> None:
         with connect() as database:
@@ -1823,12 +2376,20 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 self.google_oauth_callback()
             elif parsed.path == "/api/auth/logout":
                 self.logout_user()
+            elif parsed.path == "/api/auth/logout-all":
+                self.logout_all_sessions()
+            elif parsed.path == "/api/auth/password/forgot":
+                self.request_password_reset()
+            elif parsed.path == "/api/auth/password/reset":
+                self.reset_password()
             elif parsed.path == "/api/listings":
                 self.create_listing()
             elif parsed.path == "/api/favorites":
                 self.save_favorite()
             elif parsed.path == "/api/inquiries":
                 self.create_inquiry()
+            elif parsed.path == "/api/reports":
+                self.create_report()
             elif parsed.path == "/api/uploads":
                 self.create_upload()
             else:
@@ -1931,7 +2492,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             return
         with connect() as database:
             row = database.execute(
-                "SELECT id, user_id FROM listings WHERE id = ?", (listing_id,)
+                "SELECT id, user_id, gallery, image FROM listings WHERE id = ?",
+                (listing_id,),
             ).fetchone()
             if row is None:
                 self.send_api_error(
@@ -1947,9 +2509,22 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     "forbidden",
                 )
                 return
+            try:
+                gallery = json.loads(row["gallery"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                gallery = []
+            upload_urls = {
+                str(url)
+                for url in [*gallery, row["image"]]
+                if str(url).startswith("/api/uploads/")
+            }
             database.execute("DELETE FROM favorites WHERE listing_id = ?", (listing_id,))
             database.execute("DELETE FROM inquiries WHERE listing_id = ?", (listing_id,))
+            database.execute("DELETE FROM reports WHERE listing_id = ?", (listing_id,))
+            database.execute("DELETE FROM uploads WHERE listing_id = ?", (listing_id,))
             database.execute("DELETE FROM listings WHERE id = ?", (listing_id,))
+        # Con el anuncio fuera de la base, sus fotos se borran del disco.
+        delete_upload_files(sorted(upload_urls))
         self.send_json({"deleted": True, "listingId": listing_id})
 
     def update_listing(self, listing_id: int) -> None:
@@ -2009,11 +2584,37 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     return
                 updates["owner_name"] = owner_name
             if "ownerWhatsApp" in payload:
-                owner_whatsapp = re.sub(r"\D", "", str(payload["ownerWhatsApp"]))
-                if not 8 <= len(owner_whatsapp) <= 15:
-                    self.send_json({"error": "El WhatsApp no es válido."}, HTTPStatus.BAD_REQUEST)
+                owner_whatsapp = normalize_peru_whatsapp(payload["ownerWhatsApp"])
+                if owner_whatsapp is None:
+                    self.send_json(
+                        {
+                            "error": (
+                                "Ingresa un WhatsApp peruano válido: un celular "
+                                "de 9 dígitos que empiece con 9."
+                            )
+                        },
+                        HTTPStatus.BAD_REQUEST,
+                    )
                     return
                 updates["owner_whatsapp"] = owner_whatsapp
+            if "status" in payload:
+                new_status = str(payload["status"] or "").strip()
+                if new_status not in LISTING_STATUSES:
+                    self.send_json({"error": "Estado inválido."}, HTTPStatus.BAD_REQUEST)
+                    return
+                # El dueño pausa, reanuda, marca alquilado o republica sus
+                # anuncios ya aprobados; aprobar un anuncio pendiente o
+                # rechazado es exclusivo del administrador.
+                if not is_admin and (
+                    new_status not in OWNER_STATUS_CHOICES
+                    or row["status"] not in OWNER_STATUS_CHOICES
+                ):
+                    self.send_json(
+                        {"error": "Ese cambio de estado lo aprueba el administrador."},
+                        HTTPStatus.FORBIDDEN,
+                    )
+                    return
+                updates["status"] = new_status
             if is_admin and "badge" in payload:
                 badge = str(payload["badge"] or "").strip()[:60]
                 updates["badge"] = badge or None
@@ -2022,13 +2623,13 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 return
             assignments = ", ".join(f"{column} = ?" for column in updates)
             database.execute(
-                f"UPDATE listings SET {assignments} WHERE id = ?",
+                f"UPDATE listings SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 [*updates.values(), listing_id],
             )
             updated = database.execute(
                 "SELECT * FROM listings WHERE id = ?", (listing_id,)
             ).fetchone()
-        self.send_json({"listing": listing_dict(updated)})
+        self.send_json({"listing": listing_dict(updated, include_contact=True)})
 
     def register_user(self) -> None:
         payload = self.read_json()
@@ -2070,7 +2671,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     """,
                     (user_id,),
                 ).fetchone()
-                record_login(database, user_id, "password")
+                record_login(
+                    database, user_id, "password",
+                    self.client_ip(), self.headers.get("User-Agent", ""),
+                )
                 token = self.create_session(database, user_id)
         except sqlite3.IntegrityError:
             self.send_json(
@@ -2103,7 +2707,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     HTTPStatus.UNAUTHORIZED,
                 )
                 return
-            record_login(database, int(user["id"]), "password")
+            record_login(
+                database, int(user["id"]), "password",
+                self.client_ip(), self.headers.get("User-Agent", ""),
+            )
             token = self.create_session(database, int(user["id"]))
         self.send_json(
             {"user": user_dict(user)},
@@ -2204,14 +2811,14 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     user_id = int(cursor.lastrowid)
                 else:
                     user_id = int(existing["id"])
-                    # Al reclamar la cuenta con Google se invalida cualquier
-                    # contraseña previa: el correo no estaba verificado cuando
-                    # se registró y podría pertenecer a otra persona.
+                    # Vincular Google NO borra la contraseña previa: la cuenta
+                    # conserva sus dos formas de entrar (Google y correo con
+                    # contraseña).
                     database.execute(
                         """
                         UPDATE users
                         SET name = ?, email = ?, google_sub = ?, avatar_url = ?,
-                            auth_provider = 'google', role = ?, password_hash = ''
+                            auth_provider = 'google', role = ?
                         WHERE id = ?
                         """,
                         (name, email, google_sub, avatar_url, role, user_id),
@@ -2223,7 +2830,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     """,
                     (user_id,),
                 ).fetchone()
-                record_login(database, user_id, "google")
+                record_login(
+                    database, user_id, "google",
+                    self.client_ip(), self.headers.get("User-Agent", ""),
+                )
                 token = self.create_session(database, user_id)
         except sqlite3.IntegrityError as error:
             raise GoogleAccountError(
@@ -2357,6 +2967,112 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 database.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
         self.send_json({"loggedOut": True}, clear_session=True)
 
+    def logout_all_sessions(self) -> None:
+        """«Cerrar sesión en todos los equipos»: elimina todas las sesiones
+        activas del usuario, incluida la actual."""
+        user = self.require_user()
+        if user is None:
+            return
+        with connect() as database:
+            database.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
+        self.send_json({"loggedOut": True, "allDevices": True}, clear_session=True)
+
+    def request_password_reset(self) -> None:
+        """«Olvidé mi contraseña»: guarda un token con hash y vigencia de 45
+        minutos. No hay SMTP todavía, así que el token solo se registra en los
+        logs del servidor (el administrador puede reenviarlo manualmente); la
+        respuesta nunca revela si el correo existe ni incluye el token."""
+        payload = self.read_json()
+        email = str(payload.get("email", "")).strip().lower()
+        message = "Si el correo existe, te escribimos con los pasos para recuperarla."
+        if len(email) > 160 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            self.send_json({"requested": True, "message": message})
+            return
+        with connect() as database:
+            user = database.execute(
+                "SELECT id, email FROM users WHERE email = ?", (email,)
+            ).fetchone()
+            if user is not None:
+                token = secrets.token_urlsafe(32)
+                now = int(time.time())
+                database.execute(
+                    "DELETE FROM password_resets WHERE expires_at <= ? OR user_id = ?",
+                    (now, user["id"]),
+                )
+                database.execute(
+                    """
+                    INSERT INTO password_resets (user_id, token_hash, expires_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        user["id"],
+                        hashlib.sha256(token.encode()).hexdigest(),
+                        now + PASSWORD_RESET_TTL_SECONDS,
+                    ),
+                )
+                # Visible solo en los logs del servidor (journalctl), nunca en
+                # la respuesta HTTP de producción.
+                print(
+                    json.dumps(
+                        {
+                            "passwordReset": {
+                                "email": user["email"],
+                                "url": f"{SITE_BASE_URL}/?reset={token}",
+                                "expiresInMinutes": PASSWORD_RESET_TTL_SECONDS // 60,
+                            }
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+        self.send_json({"requested": True, "message": message})
+
+    def reset_password(self) -> None:
+        payload = self.read_json()
+        token = str(payload.get("token", "")).strip()
+        password = str(payload.get("password", ""))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,100}", token):
+            self.send_json(
+                {"error": "El enlace de recuperación no es válido o ya venció."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if len(password) < 8 or len(password) > 128:
+            self.send_json(
+                {"error": "La nueva contraseña debe tener al menos 8 caracteres."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        now = int(time.time())
+        with connect() as database:
+            row = database.execute(
+                """
+                SELECT id, user_id FROM password_resets
+                WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+                """,
+                (token_hash, now),
+            ).fetchone()
+            if row is None:
+                self.send_json(
+                    {"error": "El enlace de recuperación no es válido o ya venció."},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            database.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (hash_password(password), row["user_id"]),
+            )
+            database.execute(
+                "UPDATE password_resets SET used_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (row["id"],),
+            )
+            # Al cambiar la clave se cierran las sesiones abiertas por seguridad.
+            database.execute(
+                "DELETE FROM sessions WHERE user_id = ?", (row["user_id"],)
+            )
+        self.send_json({"reset": True})
+
     def create_listing(self) -> None:
         user = self.require_user()
         if user is None:
@@ -2367,8 +3083,19 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         location = str(payload.get("location", "")).strip()
         description = str(payload.get("description", "")).strip()
         owner_name = str(payload.get("ownerName", "")).strip()
-        owner_whatsapp = re.sub(r"\D", "", str(payload.get("ownerWhatsApp", "")))
+        owner_whatsapp = normalize_peru_whatsapp(payload.get("ownerWhatsApp", ""))
         price = parse_price(payload.get("price", 0))
+        if owner_whatsapp is None:
+            self.send_json(
+                {
+                    "error": (
+                        "Ingresa un WhatsApp peruano válido: un celular de 9 "
+                        "dígitos que empiece con 9 (se guarda como 51XXXXXXXXX)."
+                    )
+                },
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
         if (
             category not in CATEGORIES
             or not all((title, location, description, owner_name))
@@ -2376,7 +3103,6 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             or len(location) > 160
             or len(description) > 2_000
             or len(owner_name) > 80
-            or not 8 <= len(owner_whatsapp) <= 15
             or price <= 0
             or price > 10_000_000
         ):
@@ -2431,14 +3157,41 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         else:
             details = sanitize_transport_details(payload.get("details"))
         meta = build_listing_meta(category, details, service)
+        is_admin = user["role"] == "admin"
+        # Un anuncio de usuario común entra «pending» y no aparece en la lista
+        # pública hasta que el administrador lo apruebe; el administrador
+        # publica de inmediato.
+        status = "published" if is_admin else "pending"
+        uploaded_paths = [url for url in gallery if url.startswith("/api/uploads/")]
         with connect() as database:
+            if uploaded_paths and not is_admin:
+                # Cada foto subida pertenece a quien la subió: nadie puede
+                # colgar su anuncio de las fotos de otra cuenta.
+                owned = {
+                    upload_row["path"]
+                    for upload_row in database.execute(
+                        f"""
+                        SELECT path FROM uploads
+                        WHERE user_id = ? AND path IN (
+                          {",".join("?" for _ in uploaded_paths)}
+                        )
+                        """,
+                        [user["id"], *uploaded_paths],
+                    )
+                }
+                if any(path not in owned for path in uploaded_paths):
+                    self.send_json(
+                        {"error": "Una de las fotos no pertenece a tu cuenta."},
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                    return
             cursor = database.execute(
                 """
                 INSERT INTO listings
                   (category, title, location, description, image, gallery, price,
                    price_label, rating, reviews, meta, owner_name, owner_whatsapp,
-                   service, details_json, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 5, 0, ?, ?, ?, ?, ?, ?)
+                   service, details_json, user_id, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 5, 0, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     category,
@@ -2455,12 +3208,38 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     service,
                     json.dumps(details, ensure_ascii=False),
                     user["id"],
+                    status,
                 ),
             )
+            listing_id = int(cursor.lastrowid)
+            if uploaded_paths:
+                database.execute(
+                    f"""
+                    UPDATE uploads SET listing_id = ?
+                    WHERE user_id = ? AND path IN (
+                      {",".join("?" for _ in uploaded_paths)}
+                    )
+                    """,
+                    [listing_id, user["id"], *uploaded_paths],
+                )
             row = database.execute(
-                "SELECT * FROM listings WHERE id = ?", (cursor.lastrowid,)
+                "SELECT * FROM listings WHERE id = ?", (listing_id,)
             ).fetchone()
-        self.send_json({"listing": listing_dict(row)}, HTTPStatus.CREATED)
+        # Limpieza sencilla y segura: fotos del mismo usuario subidas hace más
+        # de un día y nunca adjuntadas a un anuncio.
+        try:
+            cleanup_orphan_uploads(int(user["id"]))
+        except Exception as cleanup_error:  # nunca frena la publicación
+            print(
+                json.dumps(
+                    {"requestId": self.request_id, "cleanupError": repr(cleanup_error)},
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+        self.send_json(
+            {"listing": listing_dict(row, include_contact=True)}, HTTPStatus.CREATED
+        )
 
     def save_favorite(self) -> None:
         payload = self.read_json()
@@ -2487,13 +3266,89 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         self.send_json({"saved": True}, visitor_id=visitor_id if is_new else None)
 
     def create_inquiry(self) -> None:
+        """Registra la consulta (con mensaje y fechas opcionales) y devuelve
+        el WhatsApp completo del anunciante: es el único camino público para
+        obtener el número, que en los listados viaja enmascarado."""
         payload = self.read_json()
         listing_id = int(payload.get("listingId", 0))
         if listing_id <= 0:
             self.send_json({"error": "Publicación inválida."}, HTTPStatus.BAD_REQUEST)
             return
+        message = str(payload.get("message", "") or "").strip()[:1000]
+        check_in = str(payload.get("checkIn", "") or "").strip()
+        check_out = str(payload.get("checkOut", "") or "").strip()
+        if check_in and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", check_in):
+            check_in = ""
+        if check_out and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", check_out):
+            check_out = ""
+        guests_value = payload.get("guests")
+        try:
+            guests = int(guests_value) if guests_value is not None else None
+        except (TypeError, ValueError):
+            guests = None
+        if guests is not None and not 1 <= guests <= 16:
+            guests = None
         visitor_id, is_new = self.visitor()
         channel = "whatsapp" if payload.get("channel") == "whatsapp" else "direct"
+        user = self.authenticated_user()
+        with connect() as database:
+            listing = database.execute(
+                "SELECT id, user_id, status, owner_whatsapp FROM listings WHERE id = ?",
+                (listing_id,),
+            ).fetchone()
+            if listing is None:
+                self.send_api_error(
+                    "La publicación ya no está disponible.",
+                    HTTPStatus.NOT_FOUND,
+                    "listing_not_found",
+                )
+                return
+            database.execute(
+                """
+                INSERT INTO inquiries
+                  (visitor_id, listing_id, channel, message, check_in, check_out,
+                   guests, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    visitor_id,
+                    listing_id,
+                    channel,
+                    message,
+                    check_in or None,
+                    check_out or None,
+                    guests,
+                    user["id"] if user is not None else None,
+                ),
+            )
+        # Los anuncios de demostración no tienen contacto real, y un anuncio
+        # que salió de circulación no revela el número a visitantes nuevos.
+        is_demo = listing["user_id"] is None
+        is_privileged = user is not None and (
+            user["role"] == "admin" or listing["user_id"] == user["id"]
+        )
+        can_reveal = not is_demo and (
+            listing["status"] == "published" or is_privileged
+        )
+        self.send_json(
+            {
+                "recorded": True,
+                "whatsapp": listing["owner_whatsapp"] if can_reveal else None,
+            },
+            HTTPStatus.CREATED,
+            visitor_id=visitor_id if is_new else None,
+        )
+
+    def create_report(self) -> None:
+        """«Reportar anuncio»: spam, ya alquilado, número falso u otro."""
+        payload = self.read_json()
+        listing_id = int(payload.get("listingId", 0))
+        reason = str(payload.get("reason", "")).strip()
+        comment = str(payload.get("comment", "") or "").strip()[:500]
+        if listing_id <= 0 or reason not in REPORT_REASONS:
+            self.send_json({"error": "Cuéntanos el motivo del reporte."}, HTTPStatus.BAD_REQUEST)
+            return
+        visitor_id, is_new = self.visitor()
         with connect() as database:
             exists = database.execute(
                 "SELECT 1 FROM listings WHERE id = ?", (listing_id,)
@@ -2506,11 +3361,14 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 )
                 return
             database.execute(
-                "INSERT INTO inquiries (visitor_id, listing_id, channel) VALUES (?, ?, ?)",
-                (visitor_id, listing_id, channel),
+                """
+                INSERT INTO reports (visitor_id, listing_id, reason, comment)
+                VALUES (?, ?, ?, ?)
+                """,
+                (visitor_id, listing_id, reason, comment),
             )
         self.send_json(
-            {"recorded": True},
+            {"reported": True},
             HTTPStatus.CREATED,
             visitor_id=visitor_id if is_new else None,
         )
@@ -2519,7 +3377,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         """Recibe de 1 a 15 fotos en una sola petición multipart (campo `files`
         repetido o el campo `file` de una sola foto) y las redimensiona a un
         tamaño profesional antes de guardarlas."""
-        if self.require_user() is None:
+        user = self.require_user()
+        if user is None:
             return
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0 or length > MAX_UPLOAD_REQUEST_BYTES:
@@ -2566,9 +3425,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 return
             try:
                 processed_files.append(process_upload_image(content, extension))
-            except ValueError:
+            except ValueError as error:
+                # El mensaje ya viene en español (p. ej. el aviso de HEIC).
                 self.send_api_error(
-                    "Una de las fotos está dañada o no se pudo procesar.",
+                    str(error) or "Una de las fotos está dañada o no se pudo procesar.",
                     HTTPStatus.BAD_REQUEST,
                     "invalid_image",
                 )
@@ -2581,6 +3441,13 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             filename = f"{uuid.uuid4()}.{extension}"
             (destination / filename).write_bytes(content)
             urls.append(f"/api/uploads/{folder}/{filename}")
+        # Cada foto queda ligada a la cuenta que la subió: al publicar se
+        # verifica esa propiedad y al borrar el anuncio se limpia el disco.
+        with connect() as database:
+            database.executemany(
+                "INSERT OR IGNORE INTO uploads (user_id, path) VALUES (?, ?)",
+                [(user["id"], url) for url in urls],
+            )
         self.send_json({"url": urls[0], "urls": urls}, HTTPStatus.CREATED)
 
     def serve_upload(self, request_path: str) -> None:

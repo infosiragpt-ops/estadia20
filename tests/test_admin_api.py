@@ -326,7 +326,9 @@ class AdminApiTests(unittest.TestCase):
                     "DELETE FROM users WHERE email = 'carrerajorge874@gmail.com'"
                 )
 
-    def test_google_claim_invalidates_previous_password(self) -> None:
+    def test_google_link_keeps_previous_password(self) -> None:
+        """Vincular Google no borra la contraseña: la cuenta conserva sus dos
+        formas de entrar (Google y correo con contraseña)."""
         cookie = self.register("Previa", "reclamada@example.com")
         self.assertTrue(cookie)
         original_verifier = roomies_server.verify_google_credential
@@ -351,7 +353,8 @@ class AdminApiTests(unittest.TestCase):
             "/api/auth/login",
             {"email": "reclamada@example.com", "password": "clave-segura-123"},
         )
-        self.assertEqual(status, 401)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["user"]["email"], "reclamada@example.com")
 
     def test_upload_accepts_multipart_image_and_serves_it_back(self) -> None:
         cookie = self.register("Fotógrafa", "fotografa@example.com")

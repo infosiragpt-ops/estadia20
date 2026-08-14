@@ -2,3 +2,6 @@
 # (máx. 1600×1200, JPEG progresivo o WebP) al subirlas. Si falta en el VPS,
 # el servidor guarda el archivo original como respaldo.
 Pillow==12.3.0
+# pillow-heif decodifica las fotos HEIC/HEIF del iPhone para convertirlas a
+# JPEG. Si falta, esas fotos se rechazan con un mensaje claro en español.
+pillow-heif==1.5.0
