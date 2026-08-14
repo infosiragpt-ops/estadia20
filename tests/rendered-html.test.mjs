@@ -53,6 +53,25 @@ test("ships the finished estadia20 marketplace", async () => {
   // Las fotos del anuncio se previsualizan en local y se suben al guardar.
   assert.match(page, /Preparando fotos…/);
   assert.match(page, /photo-error/);
+  // La vista previa local usa data: URLs (FileReader), que la CSP ya permite;
+  // los blob: de createObjectURL podían quedar en blanco en el teléfono.
+  assert.match(page, /readAsDataURL/);
+  assert.doesNotMatch(page, /URL\.createObjectURL/);
+  // El detalle abierto vive en la URL (?listing=ID) y se puede compartir;
+  // atrás/adelante lo cierran y reabren por historial.
+  assert.match(page, /parameters\.set\("listing", String\(listing\.id\)\)/);
+  assert.match(page, /window\.addEventListener\("popstate"/);
+  assert.match(page, /\/api\/listings\/\$\{id\}/);
+  // La pestaña pública «Estadías» se comparte con ese nombre en la URL.
+  assert.match(page, /categoryUrlAliases/);
+  // Los anuncios sembrados se muestran como «Ejemplo»: sin valoraciones
+  // inventadas y sin botón real de WhatsApp.
+  assert.match(page, /demo-badge/);
+  assert.match(page, /whatsapp-demo/);
+  assert.match(page, /Anuncio de ejemplo/);
+  assert.match(styles, /\.listing-badge\.demo-badge/);
+  assert.match(styles, /\.rating-note/);
+  assert.match(styles, /\.whatsapp-card\.whatsapp-demo/);
   assert.match(styles, /\.host-link/);
   assert.match(styles, /\.login-google-badge/);
   assert.match(styles, /\.favorite-row/);
@@ -99,6 +118,11 @@ test("hardens the VPS marketplace API", async () => {
   ]);
 
   assert.match(server, /def listings_query/);
+  // Aliases públicos: ?category=Estadías y ?sort=price siguen funcionando.
+  assert.match(server, /CATEGORY_ALIASES/);
+  assert.match(server, /LISTING_SORT_ALIASES/);
+  assert.match(server, /def get_listing/);
+  assert.match(server, /isDemo/);
   assert.match(server, /search_matches/);
   assert.match(server, /RATE_LIMIT_RULES/);
   assert.match(server, /image_extension_from_content/);
@@ -109,5 +133,7 @@ test("hardens the VPS marketplace API", async () => {
   assert.match(server, /def require_admin/);
   assert.match(workflow, /tests\.test_admin_api/);
   assert.match(nginx, /Content-Security-Policy/);
+  // img-src permite blob: además de data: para las vistas previas locales.
+  assert.match(nginx, /img-src 'self' data: blob:/);
   assert.match(workflow, /tests\.test_marketplace_api/);
 });

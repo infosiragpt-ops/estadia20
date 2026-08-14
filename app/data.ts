@@ -72,11 +72,14 @@ export type Listing = {
   ownerWhatsApp: string;
   service?: string;
   details?: ListingDetails;
+  // Anuncio sembrado como demostración: la interfaz lo marca «Ejemplo», no
+  // muestra valoraciones inventadas y desactiva el contacto por WhatsApp.
+  isDemo?: boolean;
 };
 
 const image = (id: string) => `https://images.unsplash.com/${id}`;
 
-export const demoListings: Listing[] = [
+const sampleListings: Listing[] = [
   {
     id: 1, category: "Roomies", title: "Habitación con luz y calma", location: "Barranco, Lima", description: "Habitación privada dentro de un depa compartido, con cocina equipada, escritorio y una comunidad tranquila.", image: image("photo-1505693416388-ac5ce068fe85"), gallery: [image("photo-1505693416388-ac5ce068fe85"), image("photo-1522708323590-d24dbb6b0267")], price: 780, priceLabel: "por mes", rating: 4.9, reviews: 18, meta: "1 cama · 1 baño compartido · Amoblado", badge: "Favorito entre roomies", ownerName: "Carla", ownerWhatsApp: "51999888777",
   },
@@ -126,3 +129,7 @@ export const demoListings: Listing[] = [
     id: 34, category: "Transporte", title: "Camioneta ejecutiva 2025", location: "Lima · Aeropuerto · Eventos", description: "Servicio premium para reuniones, aeropuerto y eventos. Reserva por horas o por jornada.", image: image("photo-1551830820-330a71b99659"), price: 310, priceLabel: "por servicio", rating: 4.95, reviews: 14, meta: "Camioneta 2025 · 6 pasajeros · Verificado", ownerName: "Prime Mobility", ownerWhatsApp: "51996665544", service: "Corporativo",
   },
 ];
+
+// Respaldo local cuando la API no responde: son los mismos anuncios sembrados
+// de demostración, así que siempre se marcan como ejemplo.
+export const demoListings: Listing[] = sampleListings.map((listing) => ({ ...listing, isDemo: true }));

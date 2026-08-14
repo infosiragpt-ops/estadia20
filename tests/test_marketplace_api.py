@@ -84,6 +84,77 @@ class MarketplaceApiTests(unittest.TestCase):
         self.assertIn("ETag", headers)
         self.assertIn("stale-while-revalidate", headers["Cache-Control"])
 
+    def test_estadias_category_alias_matches_airbnb(self) -> None:
+        airbnb_status, airbnb_payload, _ = self.request(
+            "GET", "/api/listings?category=Airbnb"
+        )
+        self.assertEqual(airbnb_status, 200)
+        airbnb_ids = [listing["id"] for listing in airbnb_payload["listings"]]
+        self.assertTrue(airbnb_ids)
+
+        # El nombre público de la pestaña («Estadías», con o sin tilde) debe
+        # devolver exactamente las mismas filas que la categoría interna.
+        for alias in ("Estadías", "Estadias"):
+            status, payload, _ = self.request(
+                "GET", f"/api/listings?{urlencode({'category': alias})}"
+            )
+            self.assertEqual(status, 200, payload)
+            self.assertEqual(
+                [listing["id"] for listing in payload["listings"]], airbnb_ids
+            )
+            self.assertEqual(
+                payload["meta"]["categoryTotal"],
+                airbnb_payload["meta"]["categoryTotal"],
+            )
+
+        invalid_status, invalid_payload, _ = self.request(
+            "GET", f"/api/listings?{urlencode({'category': 'Hoteles'})}"
+        )
+        self.assertEqual(invalid_status, 400)
+        self.assertEqual(invalid_payload["code"], "invalid_filters")
+
+    def test_sort_price_alias_is_accepted(self) -> None:
+        status, payload, _ = self.request(
+            "GET", "/api/listings?category=Roomies&sort=price"
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["meta"]["sort"], "price_asc")
+        prices = [listing["price"] for listing in payload["listings"]]
+        self.assertEqual(prices, sorted(prices))
+
+        invalid_status, invalid_payload, _ = self.request(
+            "GET", "/api/listings?category=Roomies&sort=barato"
+        )
+        self.assertEqual(invalid_status, 400)
+        self.assertEqual(invalid_payload["code"], "invalid_filters")
+
+    def test_listing_detail_is_public_and_shareable(self) -> None:
+        list_status, list_payload, _ = self.request(
+            "GET", "/api/listings?category=Roomies"
+        )
+        self.assertEqual(list_status, 200)
+        listed = list_payload["listings"][0]
+
+        status, payload, headers = self.request("GET", f"/api/listings/{listed['id']}")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["listing"], listed)
+        self.assertIn("ETag", headers)
+
+        missing_status, missing_payload, _ = self.request(
+            "GET", "/api/listings/999999"
+        )
+        self.assertEqual(missing_status, 404)
+        self.assertEqual(missing_payload["code"], "listing_not_found")
+
+    def test_seed_listings_are_flagged_as_demo(self) -> None:
+        status, payload, _ = self.request("GET", "/api/listings?pageSize=48")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["listings"])
+        # Los sembrados no tienen dueño (user_id NULL) y se marcan isDemo para
+        # que la interfaz los muestre como «Ejemplo».
+        for listing in payload["listings"]:
+            self.assertTrue(listing["isDemo"], listing["title"])
+
     def test_depa_features_and_price_ranges_are_server_side(self) -> None:
         query = urlencode(
             {

@@ -253,6 +253,18 @@ class PublishApiTests(unittest.TestCase):
         self.assertEqual(listing["meta"], "1 cama · 1 baño compartido · Amoblado")
         self.assertEqual(listing["priceLabel"], "por mes")
 
+    def test_publish_accepts_estadias_alias_for_airbnb(self) -> None:
+        cookie = self.register("Estadista", "estadias-alias@example.com")
+        listing_payload = self.base_listing("Estadías")
+        status, payload = self.request("POST", "/api/listings", listing_payload, cookie=cookie)
+        self.assertEqual(status, 201, payload)
+        listing = payload["listing"]
+        # El alias público se guarda como la categoría interna «Airbnb» y un
+        # anuncio real nunca queda marcado como ejemplo.
+        self.assertEqual(listing["category"], "Airbnb")
+        self.assertEqual(listing["priceLabel"], "por noche")
+        self.assertFalse(listing["isDemo"])
+
     def test_stay_details_are_bounded_and_build_meta(self) -> None:
         cookie = self.register("Anfitriona", "anfitriona-detalles@example.com")
         listing_payload = self.base_listing("Airbnb")
