@@ -28,6 +28,12 @@ const categories: Array<{ id: Category; label: string; short: string }> = [
   { id: "Transporte", label: "Transporte", short: "Mudanzas y premium" },
 ];
 
+// En la URL la categoría interna «Airbnb» se comparte con su nombre público
+// «Estadías» (el backend acepta ambos). Al leer se aceptan los dos, con y sin
+// tilde, para que cualquier enlace copiado siga funcionando.
+const categoryUrlValues: Record<Category, string> = { Roomies: "Roomies", Depas: "Depas", Airbnb: "Estadías", Transporte: "Transporte" };
+const categoryUrlAliases: Record<string, Category> = { "Estadías": "Airbnb", "Estadias": "Airbnb" };
+
 const categoryDetails: Record<Category, { noun: string; date: string; guests: string; priceLabel: string }> = {
   Roomies: { noun: "habitaciones", date: "Desde un mes", guests: "1 roomie", priceLabel: "por mes" },
   Depas: { noun: "departamentos", date: "6–12 meses", guests: "2 personas", priceLabel: "por mes" },
@@ -102,10 +108,22 @@ const MAX_PUBLISH_PHOTOS = 15;
 const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
 const PHOTO_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
-// Las fotos se previsualizan en local (object URL) apenas se eligen y solo se
-// suben al servidor cuando el anuncio se guarda. Una foto inválida conserva su
-// casilla con el motivo en español en vez de desaparecer en silencio.
+// Las fotos se previsualizan en local apenas se eligen y solo se suben al
+// servidor cuando el anuncio se guarda. La vista previa usa un data: URL
+// (FileReader) porque la CSP del sitio ya permite imágenes data: en todos los
+// navegadores; un blob: URL puede quedar en blanco en el teléfono. Una foto
+// inválida conserva su casilla con el motivo en español en vez de desaparecer
+// en silencio.
 type PublishPhoto = { id: number; file: File; preview: string; error?: string };
+
+function readPhotoPreview(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+}
 
 const plans = [
   { name: "Roomie", price: "S/ 25", detail: "por habitación al año", icon: "⌂" },
@@ -307,6 +325,71 @@ function whatsappLink(listing: Listing, stay?: { checkIn: string; checkOut: stri
 
 function listingImages(listing: Listing) {
   return Array.from(new Set([listing.image, ...(listing.gallery ?? [])].filter(Boolean)));
+}
+
+function trackInquiry(listingId: number) {
+  void fetch("/api/inquiries", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ listingId, channel: "whatsapp" }),
+    keepalive: true,
+  });
+}
+
+async function fetchListingById(id: number): Promise<Listing | null> {
+  try {
+    const response = await fetch(`/api/listings/${id}`, { cache: "no-cache" });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { listing?: Listing };
+    return payload.listing ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function listingIdFromUrl() {
+  const value = Number(new URLSearchParams(window.location.search).get("listing"));
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+// Botón de WhatsApp de las tarjetas y filas de favoritos. En los anuncios de
+// ejemplo se desactiva para que nadie escriba a números de demostración.
+function WhatsappCta({ listing, stay }: { listing: Listing; stay?: { checkIn: string; checkOut: string; guests: number } }) {
+  if (listing.isDemo) {
+    return (
+      <span
+        className="whatsapp-card whatsapp-demo"
+        role="note"
+        title="Anuncio de ejemplo, sin contacto real"
+        onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
+      >
+        <span>Ejemplo</span>
+      </span>
+    );
+  }
+  return (
+    <a
+      className="whatsapp-card"
+      href={whatsappLink(listing, stay)}
+      onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Contactar a ${listing.ownerName} por WhatsApp`}
+      title={`Chatear con ${listing.ownerName} en WhatsApp`}
+    >
+      <WhatsappIcon />
+      <span>WhatsApp</span>
+    </a>
+  );
+}
+
+// Valoración de la tarjeta: los anuncios de ejemplo no muestran estrellas
+// inventadas y un anuncio real sin reseñas aparece como «Nuevo» en vez de
+// nacer con un 5.0 perfecto.
+function ListingRating({ listing }: { listing: Listing }) {
+  if (listing.isDemo) return <span className="rating-note">Ejemplo</span>;
+  if (!listing.reviews) return <span className="rating-note">Nuevo</span>;
+  return <span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span>;
 }
 
 function imageUrl(source: string, width: number) {
@@ -875,8 +958,11 @@ function readInitialUrlState() {
   };
   if (typeof window === "undefined") return defaults;
   const parameters = new URLSearchParams(window.location.search);
-  const category = parameters.get("category");
-  const requestedSort = parameters.get("sort");
+  const requestedCategory = parameters.get("category") ?? "";
+  const category = categoryUrlAliases[requestedCategory] ?? requestedCategory;
+  const rawSort = parameters.get("sort");
+  // `price` es el alias corto que también acepta la API (price → price_asc).
+  const requestedSort = rawSort === "price" ? "price_asc" : rawSort;
   const requestedBedrooms = parameters.get("bedrooms");
   const requestedService = parameters.get("service");
   const requestedCheckIn = parameters.get("checkIn");
@@ -952,6 +1038,7 @@ export default function Home() {
   const autoNudgesShownRef = useRef(0);
   const favoritesFetchedRef = useRef("");
   const listingsCacheRef = useRef(new Map<string, { etag: string; payload: ListingsPayload }>());
+  const openListingFromUrlRef = useRef<(id: number) => Promise<void>>(async () => undefined);
   const noticeTimeoutRef = useRef<number | null>(null);
   const nextPageRef = useRef(2);
   const listingsQueryRef = useRef("");
@@ -983,7 +1070,7 @@ export default function Home() {
 
   useEffect(() => {
     const parameters = new URLSearchParams();
-    parameters.set("category", activeCategory);
+    parameters.set("category", categoryUrlValues[activeCategory]);
     if (search.trim()) parameters.set("q", search.trim());
     if (sort !== "recommended") parameters.set("sort", sort);
     if (activeCategory === "Depas") {
@@ -999,8 +1086,12 @@ export default function Home() {
       parameters.set("checkOut", checkOut);
       parameters.set("guests", String(guestCount));
     }
+    // El detalle abierto (?listing=ID) se conserva para que la URL siga
+    // siendo compartible; abrirlo y cerrarlo lo maneja el historial.
+    const openListingParameter = new URLSearchParams(window.location.search).get("listing");
+    if (openListingParameter) parameters.set("listing", openListingParameter);
     const query = parameters.toString();
-    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   }, [activeCategory, bedrooms, checkIn, checkOut, guestCount, maxPrice, minPrice, search, selectedDepaFeatures, service, sort]);
 
   const listingsQueryString = useMemo(() => {
@@ -1151,6 +1242,33 @@ export default function Home() {
 
   useEffect(() => () => {
     if (noticeTimeoutRef.current !== null) window.clearTimeout(noticeTimeoutRef.current);
+  }, []);
+
+  // Siempre apunta a la versión más reciente (con los anuncios ya cargados)
+  // para que popstate y la primera carga no usen datos viejos.
+  useEffect(() => {
+    openListingFromUrlRef.current = openListingFromUrl;
+  });
+
+  // Enlace compartido: si la página carga con ?listing=ID se abre ese detalle.
+  useEffect(() => {
+    const initialListingId = listingIdFromUrl();
+    if (initialListingId !== null) void openListingFromUrlRef.current(initialListingId);
+  }, []);
+
+  // «Atrás» y «adelante» del navegador cierran y reabren el detalle según el
+  // parámetro ?listing de cada entrada del historial.
+  useEffect(() => {
+    function handlePopState() {
+      const id = listingIdFromUrl();
+      if (id === null) {
+        setSelectedListing(null);
+        return;
+      }
+      void openListingFromUrlRef.current(id);
+    }
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   // Primer aviso para visitantes: un banner discreto bajo la cabecera ~1.5 s
@@ -1388,15 +1506,6 @@ export default function Home() {
     }
   }
 
-  function trackInquiry(listingId: number) {
-    void fetch("/api/inquiries", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listingId, channel: "whatsapp" }),
-      keepalive: true,
-    });
-  }
-
   function flashNotice(message: string, tone: "success" | "error" = "success") {
     if (noticeTimeoutRef.current !== null) window.clearTimeout(noticeTimeoutRef.current);
     setNotice(message);
@@ -1493,10 +1602,47 @@ export default function Home() {
     });
   }
 
+  async function openListingFromUrl(id: number) {
+    const known = [...listingsFromDb, ...favoriteDetails, ...demoListings]
+      .find((listing) => listing.id === id);
+    const listing = known ?? await fetchListingById(id);
+    if (!listing) {
+      setSelectedListing(null);
+      flashNotice("Ese anuncio ya no está disponible", "error");
+      return;
+    }
+    setSelectedImageIndex(0);
+    setSelectedListing(listing);
+  }
+
   function openListing(listing: Listing) {
     setShowMenu(false);
     setSelectedImageIndex(galleryIndexes[listing.id] ?? 0);
     setSelectedListing(listing);
+    // El anuncio abierto queda en la URL (?listing=ID) como una entrada del
+    // historial: se puede compartir, recargar y cerrar con «atrás».
+    const parameters = new URLSearchParams(window.location.search);
+    if (parameters.get("listing") === String(listing.id)) return;
+    parameters.set("listing", String(listing.id));
+    window.history.pushState({ listing: listing.id }, "", `${window.location.pathname}?${parameters.toString()}`);
+  }
+
+  function closeListing() {
+    // Si la entrada actual del historial la creó openListing, «atrás» cierra
+    // el detalle (popstate limpia el estado). Si se llegó directo con un
+    // enlace compartido, solo se quita el parámetro sin salir del sitio.
+    const historyState = window.history.state as { listing?: number } | null;
+    if (historyState && typeof historyState === "object" && historyState.listing) {
+      window.history.back();
+      return;
+    }
+    setSelectedListing(null);
+    const parameters = new URLSearchParams(window.location.search);
+    if (parameters.has("listing")) {
+      parameters.delete("listing");
+      const query = parameters.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    }
   }
 
   function openLogin() {
@@ -1750,7 +1896,9 @@ export default function Home() {
                         draggable={false}
                       />
                     )}
-                    {listing.badge && <span className="listing-badge">{listing.badge}</span>}
+                    {/* Los anuncios sembrados se marcan «Ejemplo» y no lucen
+                        insignias de prueba social que no son reales. */}
+                    {listing.isDemo ? <span className="listing-badge demo-badge">Ejemplo</span> : listing.badge && <span className="listing-badge">{listing.badge}</span>}
                     <button disabled={favoriteMutations.includes(listing.id)} className={`favorite-button ${favorites.includes(listing.id) ? "is-favorite" : ""}`} onClick={(event) => { event.stopPropagation(); toggleFavorite(listing.id); }} aria-label={favorites.includes(listing.id) ? "Quitar de favoritos" : "Guardar en favoritos"} aria-pressed={favorites.includes(listing.id)}>{favoriteMutations.includes(listing.id) ? "…" : favorites.includes(listing.id) ? "♥" : "♡"}</button>
                     <button className="carousel-arrow previous" disabled={images.length < 2 || imageIndex === 0} onClick={(event) => { event.stopPropagation(); moveGallery(listing, -1); }} aria-label={`Fotografía anterior de ${listing.title}`}>‹</button>
                     <button className="carousel-arrow" disabled={images.length < 2 || imageIndex >= images.length - 1} onClick={(event) => { event.stopPropagation(); moveGallery(listing, 1); }} aria-label={`Siguiente fotografía de ${listing.title}`}>›</button>
@@ -1761,7 +1909,7 @@ export default function Home() {
                   {activeCategory === "Depas" ? (() => {
                     const details = depaDetails(listing);
                     return <div className="listing-copy depa-copy">
-                      <div className="depa-title-row"><h2><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
+                      <div className="depa-title-row"><h2><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h2><ListingRating listing={listing} /></div>
                       <p className="depa-status"><strong>{details.delivery}</strong><span>·</span>{details.availability}</p>
                       <p className="depa-rent"><span>Alquiler desde</span><strong>{money.format(listing.price)}</strong></p>
                       <p className="depa-address">{details.address}</p>
@@ -1774,17 +1922,17 @@ export default function Home() {
                       </div>
                       <div className="depa-card-footer">
                         <div className="depa-feature-preview">{details.features.slice(0, 3).map((feature) => <span key={feature}>{feature}</span>)}</div>
-                        <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`} title={`Chatear con ${listing.ownerName} en WhatsApp`}><WhatsappIcon /><span>WhatsApp</span></a>
+                        <WhatsappCta listing={listing} />
                       </div>
                     </div>;
                   })() : <div className="listing-copy">
-                      <div className="card-title-row"><h2><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h2><span>★ {listing.rating.toFixed(2).replace(/0$/, "")} <small>({listing.reviews})</small></span></div>
+                      <div className="card-title-row"><h2><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h2><ListingRating listing={listing} /></div>
                       <p className="listing-location">{listing.location}</p>
                       <p className="listing-meta">{listing.meta}</p>
                       <p className="listing-dates">{dateLabel}</p>
                       <div className="price-row">
-                        <div><p><strong>{money.format(listing.price)}</strong> <span>{listing.priceLabel}</span></p><span className="cancellation-tag">Contacto directo</span></div>
-                        <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`} title={`Chatear con ${listing.ownerName} en WhatsApp`}><WhatsappIcon /><span>WhatsApp</span></a>
+                        <div><p><strong>{money.format(listing.price)}</strong> <span>{listing.priceLabel}</span></p><span className="cancellation-tag">{listing.isDemo ? "Anuncio de ejemplo" : "Contacto directo"}</span></div>
+                        <WhatsappCta listing={listing} />
                       </div>
                     </div>}
                 </article>
@@ -1901,7 +2049,7 @@ export default function Home() {
                       <p className="favorite-price"><strong>{money.format(listing.price)}</strong> <em>{listing.priceLabel}</em></p>
                     </div>
                     <div className="favorite-actions">
-                      <a className="whatsapp-card" href={whatsappLink(listing)} onClick={(event) => { event.stopPropagation(); trackInquiry(listing.id); }} target="_blank" rel="noreferrer" aria-label={`Contactar a ${listing.ownerName} por WhatsApp`} title={`Chatear con ${listing.ownerName} en WhatsApp`}><WhatsappIcon /><span>WhatsApp</span></a>
+                      <WhatsappCta listing={listing} />
                       <button className="favorite-remove" disabled={favoriteMutations.includes(listing.id)} onClick={(event) => { event.stopPropagation(); toggleFavorite(listing.id); }} aria-label={`Quitar ${listing.title} de favoritos`}>{favoriteMutations.includes(listing.id) ? "…" : "♥"}</button>
                     </div>
                   </article>
@@ -1918,8 +2066,8 @@ export default function Home() {
       {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => { setListingsFromDb((current) => [listing, ...current]); setActiveCategory(listing.category); setRetryListings((value) => value + 1); setShowPublish(false); flashNotice("Tu publicación fue guardada"); }} />}
 
       {selectedListing && (
-        <Modal onClose={() => setSelectedListing(null)} className="detail-modal">
-          <button className="close-button detail-close" onClick={() => setSelectedListing(null)} aria-label="Cerrar detalle">×</button>
+        <Modal onClose={closeListing} className="detail-modal">
+          <button className="close-button detail-close" onClick={closeListing} aria-label="Cerrar detalle">×</button>
           <div className="detail-image">
             {selectedGallery.length > 1 ? (
               <SwipeGallery
@@ -1936,7 +2084,7 @@ export default function Home() {
             ) : (
               <img src={imageUrl(selectedGallery[0] ?? selectedListing.image, 1200)} alt={`${selectedListing.title}, fotografía 1`} draggable={false} />
             )}
-            {selectedListing.badge && <span>{selectedListing.badge}</span>}
+            {selectedListing.isDemo ? <span className="demo-badge">Ejemplo</span> : selectedListing.badge && <span>{selectedListing.badge}</span>}
             {selectedGallery.length > 1 && <>
               <button className="detail-gallery-arrow previous" disabled={safeSelectedImageIndex === 0} onClick={() => setSelectedImageIndex((current) => Math.max(0, current - 1))} aria-label="Fotografía anterior">‹</button>
               <button className="detail-gallery-arrow next" disabled={safeSelectedImageIndex >= selectedGallery.length - 1} onClick={() => setSelectedImageIndex((current) => Math.min(selectedGallery.length - 1, current + 1))} aria-label="Siguiente fotografía">›</button>
@@ -1947,7 +2095,7 @@ export default function Home() {
             </>}
           </div>
           <div className="detail-body">
-            <div className="detail-title"><div><span className="modal-kicker">{selectedListing.category}</span><h2>{selectedListing.title}</h2></div><strong>★ {selectedListing.rating.toFixed(1)} ({selectedListing.reviews})</strong></div>
+            <div className="detail-title"><div><span className="modal-kicker">{categoryLabel(selectedListing.category)}</span><h2>{selectedListing.title}</h2></div>{selectedListing.isDemo ? <strong className="rating-note">Anuncio de ejemplo</strong> : selectedListing.reviews > 0 ? <strong>★ {selectedListing.rating.toFixed(1)} ({selectedListing.reviews})</strong> : <strong className="rating-note">Nuevo</strong>}</div>
             <p className="detail-location">{selectedListing.category === "Depas" ? depaDetails(selectedListing).address : selectedListing.location}</p>
             <p className="detail-description">{selectedListing.description}</p>
             {selectedListing.category === "Depas" && (() => {
@@ -1963,7 +2111,7 @@ export default function Home() {
               <div className="detail-stay-total"><span>{money.format(selectedListing.price)} × {airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span><strong>{money.format(selectedListing.price * airbnbNights)}</strong></div>
             </div>}
             <div className="detail-benefits"><span>✓ Contacto directo con quien publica</span><span>✓ Coordinas por WhatsApp</span><span>✓ Sin comisiones</span></div>
-            <div className="detail-footer"><div><small>{selectedListing.category === "Depas" ? "Alquiler desde" : selectedListing.category === "Airbnb" ? `Total por ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}` : "Precio"}</small><strong>{selectedListing.category === "Airbnb" ? money.format(selectedListing.price * airbnbNights) : money.format(selectedListing.price)} {selectedListing.category !== "Airbnb" && <em>{selectedListing.priceLabel}</em>}</strong></div><a className="primary-button" href={whatsappLink(selectedListing, { checkIn, checkOut, guests: guestCount })} onClick={() => trackInquiry(selectedListing.id)} target="_blank" rel="noreferrer">{selectedListing.category === "Airbnb" ? "Consultar disponibilidad" : "Contactar por WhatsApp"} <Icon>↗</Icon></a></div>
+            <div className="detail-footer"><div><small>{selectedListing.category === "Depas" ? "Alquiler desde" : selectedListing.category === "Airbnb" ? `Total por ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}` : "Precio"}</small><strong>{selectedListing.category === "Airbnb" ? money.format(selectedListing.price * airbnbNights) : money.format(selectedListing.price)} {selectedListing.category !== "Airbnb" && <em>{selectedListing.priceLabel}</em>}</strong></div>{selectedListing.isDemo ? <button type="button" className="primary-button demo-cta" disabled title="Anuncio de ejemplo, sin contacto real">Anuncio de ejemplo</button> : <a className="primary-button" href={whatsappLink(selectedListing, { checkIn, checkOut, guests: guestCount })} onClick={() => trackInquiry(selectedListing.id)} target="_blank" rel="noreferrer">{selectedListing.category === "Airbnb" ? "Consultar disponibilidad" : "Contactar por WhatsApp"} <Icon>↗</Icon></a>}</div>
           </div>
         </Modal>
       )}
@@ -2287,34 +2435,31 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
   const [publishStep, setPublishStep] = useState<"photos" | "listing" | null>(null);
   const [error, setError] = useState("");
   const photoIdRef = useRef(0);
-  const photosRef = useRef<PublishPhoto[]>([]);
   const copy = publishCopy[activeCategory];
   const validPhotos = photos.filter((photo) => !photo.error);
 
-  useEffect(() => {
-    photosRef.current = photos;
-  }, [photos]);
-
-  useEffect(() => () => {
-    for (const photo of photosRef.current) URL.revokeObjectURL(photo.preview);
-  }, []);
-
-  function addPhotos(files: FileList | null) {
-    if (!files?.length) return;
+  async function addPhotos(files: FileList | null) {
+    // La lista se copia antes del primer await: el input se limpia al volver.
+    const incoming = Array.from(files ?? []);
+    if (!incoming.length) return;
     let message = "";
     const accepted: PublishPhoto[] = [];
     const rejected: PublishPhoto[] = [];
     let total = photos.length;
-    for (const file of Array.from(files)) {
+    for (const file of incoming) {
       if (total >= MAX_PUBLISH_PHOTOS) { message = `Puedes subir máximo ${MAX_PUBLISH_PHOTOS} fotos.`; break; }
       photoIdRef.current += 1;
-      const preview = URL.createObjectURL(file);
+      // Solo se lee la vista previa de fotos dentro del límite de peso; un
+      // data: URL de un archivo gigante consumiría demasiada memoria.
+      const preview = file.size <= MAX_PHOTO_BYTES ? await readPhotoPreview(file) : "";
       // Una foto inválida no se descarta en silencio: su casilla se queda en
       // la cuadrícula con el motivo, y las demás fotos válidas sí entran.
       if (!PHOTO_MIME_TYPES.includes(file.type)) {
         rejected.push({ id: photoIdRef.current, file, preview, error: "Formato no válido. Usa JPG, PNG o WebP." });
       } else if (file.size > MAX_PHOTO_BYTES) {
         rejected.push({ id: photoIdRef.current, file, preview, error: "Pesa más de 12 MB. Elige una versión más ligera." });
+      } else if (!preview) {
+        rejected.push({ id: photoIdRef.current, file, preview, error: "No se pudo leer la foto. Inténtalo otra vez." });
       } else {
         accepted.push({ id: photoIdRef.current, file, preview });
       }
@@ -2342,11 +2487,7 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
   }
 
   function removePhoto(id: number) {
-    setPhotos((current) => {
-      const removed = current.find((photo) => photo.id === id);
-      if (removed) URL.revokeObjectURL(removed.preview);
-      return current.filter((photo) => photo.id !== id);
-    });
+    setPhotos((current) => current.filter((photo) => photo.id !== id));
   }
 
   function detailsPayload() {
@@ -2454,7 +2595,7 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
             {photos.map((photo, index) => (
               <div key={photo.id} className={`photo-thumb ${index === 0 && !photo.error ? "cover" : ""} ${photo.error ? "has-error" : ""}`.trim()}>
                 <button type="button" className="photo-cover-button" disabled={Boolean(photo.error)} onClick={() => makeCover(photo.id)} aria-label={photo.error ? `Foto ${index + 1} con error: ${photo.error}` : index === 0 ? `Foto ${index + 1}, es la portada` : `Usar la foto ${index + 1} como portada`}>
-                  <img src={photo.preview} alt="" />
+                  {photo.preview && <img src={photo.preview} alt="" />}
                   {index === 0 && !photo.error && <span className="cover-badge">Portada</span>}
                   {photo.error && <span className="photo-error" role="alert">{photo.error}</span>}
                 </button>
@@ -2463,7 +2604,7 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
             ))}
             {photos.length < MAX_PUBLISH_PHOTOS && (
               <label className="photo-add-tile">
-                <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { addPhotos(event.target.files); event.target.value = ""; }} />
+                <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void addPhotos(event.target.files); event.target.value = ""; }} />
                 <span><b>+</b><small>Agregar fotos</small></span>
               </label>
             )}
