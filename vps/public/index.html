@@ -29,8 +29,27 @@
     />
     <link rel="icon" href="/favicon.svg" />
     <title>Llaves365 — encuentra tu próximo lugar</title>
-    <script type="module" crossorigin src="/assets/index-BmvHXTPn.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-65jLTEA9.css">
+    <!-- Datos estructurados: los buscadores leen este JSON-LD del HTML (la
+         CSP no aplica porque no es un script ejecutable). El único perfil
+         social oficial es la página de Facebook. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Llaves365",
+        "url": "https://llaves365.com/",
+        "logo": "https://llaves365.com/favicon.svg",
+        "sameAs": ["https://www.facebook.com/profile.php?id=61592602154789"],
+        "contactPoint": {
+          "@type": "ContactPoint",
+          "contactType": "customer support",
+          "telephone": "+51918714054",
+          "availableLanguage": "es"
+        }
+      }
+    </script>
+    <script type="module" crossorigin src="/assets/index-Vrq1r0Da.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CGp_AKPF.css">
   </head>
   <body>
     <div id="root"></div>

@@ -70,7 +70,8 @@ jobs:
             tests.test_google_auth \
             tests.test_marketplace_api \
             tests.test_publish_api \
-            tests.test_admin_api
+            tests.test_admin_api \
+            tests.test_wave1_api
 
       - name: Package release
         run: |

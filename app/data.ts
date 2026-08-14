@@ -69,9 +69,14 @@ export type Listing = {
   meta: string;
   badge?: string;
   ownerName: string;
+  // En las respuestas públicas el número llega enmascarado (519•••••••77);
+  // el número completo se obtiene recién al registrar la consulta.
   ownerWhatsApp: string;
+  ownerWhatsAppMasked?: boolean;
   service?: string;
   details?: ListingDetails;
+  // Ciclo de vida del anuncio: published, paused, rented, pending o rejected.
+  status?: string;
   // Anuncio sembrado como demostración: la interfaz lo marca «Ejemplo», no
   // muestra valoraciones inventadas y desactiva el contacto por WhatsApp.
   isDemo?: boolean;
