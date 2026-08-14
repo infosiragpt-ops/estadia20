@@ -1253,7 +1253,21 @@ export default function Home() {
   // Enlace compartido: si la página carga con ?listing=ID se abre ese detalle.
   useEffect(() => {
     const initialListingId = listingIdFromUrl();
-    if (initialListingId !== null) void openListingFromUrlRef.current(initialListingId);
+    if (initialListingId === null) return;
+    // Si se llegó directo con el enlace (sin la entrada que crea openListing)
+    // se deja una entrada base sin ?listing debajo del detalle, así «atrás»
+    // cierra el overlay sin sacar al visitante del sitio. Tras una recarga la
+    // entrada ya trae su marca en history.state y no se duplica nada.
+    const historyState = window.history.state as { listing?: number } | null;
+    if (!(historyState && typeof historyState === "object" && historyState.listing === initialListingId)) {
+      const parameters = new URLSearchParams(window.location.search);
+      parameters.delete("listing");
+      const baseQuery = parameters.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${baseQuery ? `?${baseQuery}` : ""}`);
+      parameters.set("listing", String(initialListingId));
+      window.history.pushState({ listing: initialListingId }, "", `${window.location.pathname}?${parameters.toString()}`);
+    }
+    void openListingFromUrlRef.current(initialListingId);
   }, []);
 
   // «Atrás» y «adelante» del navegador cierran y reabren el detalle según el
@@ -1603,7 +1617,9 @@ export default function Home() {
   }
 
   async function openListingFromUrl(id: number) {
-    const known = [...listingsFromDb, ...favoriteDetails, ...demoListings]
+    // Solo se buscan anuncios que vinieron del backend: los ids del respaldo
+    // local de demostración no corresponden a los de la base de datos.
+    const known = [...listingsFromDb, ...favoriteDetails]
       .find((listing) => listing.id === id);
     const listing = known ?? await fetchListingById(id);
     if (!listing) {
