@@ -1,3 +1,4 @@
 User-agent: *
 Allow: /api/uploads/
 Disallow: /api/
+Sitemap: https://llaves365.com/sitemap.xml

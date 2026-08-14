@@ -29,6 +29,25 @@
     />
     <link rel="icon" href="/favicon.svg" />
     <title>Llaves365 — encuentra tu próximo lugar</title>
+    <!-- Datos estructurados: los buscadores leen este JSON-LD del HTML (la
+         CSP no aplica porque no es un script ejecutable). El único perfil
+         social oficial es la página de Facebook. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Llaves365",
+        "url": "https://llaves365.com/",
+        "logo": "https://llaves365.com/favicon.svg",
+        "sameAs": ["https://www.facebook.com/profile.php?id=61592602154789"],
+        "contactPoint": {
+          "@type": "ContactPoint",
+          "contactType": "customer support",
+          "telephone": "+51918714054",
+          "availableLanguage": "es"
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
