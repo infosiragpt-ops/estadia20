@@ -229,6 +229,66 @@ test("ola 1: compartir, legal, HEIC, WhatsApp protegido y ciclo de vida", async 
   assert.match(packageJson, /tests\.test_wave1_api/);
 });
 
+test("alcance mundial: ubicación por IP, WhatsApp E.164, moneda ISO y órdenes de demanda", async () => {
+  const [page, styles, server, packageJson, workflow, indexHtml] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+    readFile(new URL("vps/server.py", root), "utf8"),
+    readFile(new URL("package.json", root), "utf8"),
+    readFile(new URL(".github/workflows/deploy-production.yml", root), "utf8"),
+    readFile(new URL("vps/index.html", root), "utf8"),
+  ]);
+
+  // A. GET /api/geo: X-Real-IP, servicios sin clave y respaldo Perú/Lima.
+  assert.match(server, /"\/api\/geo"/);
+  assert.match(server, /def resolve_geo/);
+  assert.match(server, /def fetch_geo_for_ip/);
+  assert.match(server, /is_public_ip/);
+  assert.match(server, /GEO_PROVIDERS/);
+  assert.match(server, /GEO_FALLBACK_CITY = "Lima"/);
+  assert.doesNotMatch(server, /api[_-]?key/i);
+  assert.match(page, /fetch\("\/api\/geo"\)/);
+  assert.match(page, /llaves365-geo/);
+  assert.match(page, /geo-banner/);
+  assert.match(page, /Ver todo el mundo/);
+  assert.match(styles, /\.geo-banner/);
+
+  // B. La zona detectada sube primero sin filtrar (near/nearCountry) y los
+  // órdenes nuevos usan señales reales de demanda.
+  assert.match(server, /nearCountry/);
+  assert.match(server, /nearMatches/);
+  assert.match(server, /"demanded"/);
+  assert.match(server, /"fastest"/);
+  assert.match(server, /LISTING_DEMAND_SQL/);
+  assert.match(server, /LISTING_SPEED_SQL/);
+  assert.match(page, /parameters\.set\("near", geo\.city\)/);
+  assert.match(page, /Más solicitados/);
+  assert.match(page, /Se alquilan más rápido/);
+
+  // C. WhatsApp mundial en E.164: internacional con «+», y el celular
+  // peruano de siempre sin el prefijo.
+  assert.match(server, /def normalize_whatsapp/);
+  assert.match(server, /normalize_peru_whatsapp/);
+  assert.match(server, /WHATSAPP_ERROR_MESSAGE/);
+  assert.match(page, /51999888777 o \+34600111222/);
+
+  // D. País, ciudad y moneda ISO 4217 del anuncio, sin tipo de cambio.
+  assert.match(server, /COUNTRY_CURRENCIES/);
+  assert.match(server, /CURRENCY_CODES/);
+  assert.match(page, /COUNTRY_CURRENCY_DATA/);
+  assert.match(page, /Moneda del precio/);
+  assert.match(page, /<label>País<select/);
+  assert.match(page, /<label>Ciudad<input/);
+  assert.match(page, /Intl\.DisplayNames/);
+  assert.match(page, /function formatMoney/);
+  assert.doesNotMatch(page, /Español \(PE\) · S\/ PEN/);
+
+  // E. El sitio se presenta mundial y las pruebas nuevas corren en CI.
+  assert.match(indexHtml, /en todo el mundo/);
+  assert.match(packageJson, /tests\.test_worldwide_api/);
+  assert.match(workflow, /tests\.test_worldwide_api/);
+});
+
 test("hardens the VPS marketplace API", async () => {
   const [server, nginx, workflow] = await Promise.all([
     readFile(new URL("vps/server.py", root), "utf8"),
