@@ -59,6 +59,11 @@ export type Listing = {
   category: Category;
   title: string;
   location: string;
+  // Alcance mundial: país ISO 3166-1 alfa-2, ciudad y moneda ISO 4217 del
+  // anuncio. El precio se muestra en esa moneda, sin conversión.
+  country?: string;
+  city?: string;
+  currency?: string;
   description: string;
   image: string;
   gallery?: string[];

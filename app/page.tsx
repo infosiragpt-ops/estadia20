@@ -29,6 +29,100 @@ const CONTACT_WHATSAPP_URL = `https://wa.me/51918714054?text=${encodeURIComponen
 // queda guardado en localStorage.
 const COOKIE_CONSENT_STORAGE_KEY = "llaves365-cookie-consent";
 
+// --- Alcance mundial ---------------------------------------------------------
+// El sitio funciona en cualquier país: GET /api/geo ubica al visitante por su
+// IP (sin claves de pago) y la portada muestra primero lo de su zona. La
+// ubicación se cachea por sesión y el visitante puede ver todo el mundo.
+const GEO_STORAGE_KEY = "llaves365-geo";
+const GEO_WORLDWIDE_KEY = "llaves365-geo-worldwide";
+type GeoInfo = { country: string; city: string; currency: string };
+const GEO_FALLBACK: GeoInfo = { country: "PE", city: "Lima", currency: "PEN" };
+
+// Moneda local de cada país (ISO 3166-1 alfa-2 → ISO 4217): sugiere la moneda
+// al publicar. El precio se muestra siempre en la moneda del anuncio, sin
+// ningún tipo de cambio. La misma tabla vive en el backend (vps/server.py).
+const COUNTRY_CURRENCY_DATA =
+  "AD:EUR,AE:AED,AF:AFN,AG:XCD,AI:XCD,AL:ALL,AM:AMD,AO:AOA,AQ:USD,AR:ARS," +
+  "AS:USD,AT:EUR,AU:AUD,AW:AWG,AX:EUR,AZ:AZN,BA:BAM,BB:BBD,BD:BDT,BE:EUR," +
+  "BF:XOF,BG:BGN,BH:BHD,BI:BIF,BJ:XOF,BL:EUR,BM:BMD,BN:BND,BO:BOB,BQ:USD," +
+  "BR:BRL,BS:BSD,BT:BTN,BV:NOK,BW:BWP,BY:BYN,BZ:BZD,CA:CAD,CC:AUD,CD:CDF," +
+  "CF:XAF,CG:XAF,CH:CHF,CI:XOF,CK:NZD,CL:CLP,CM:XAF,CN:CNY,CO:COP,CR:CRC," +
+  "CU:CUP,CV:CVE,CW:ANG,CX:AUD,CY:EUR,CZ:CZK,DE:EUR,DJ:DJF,DK:DKK,DM:XCD," +
+  "DO:DOP,DZ:DZD,EC:USD,EE:EUR,EG:EGP,EH:MAD,ER:ERN,ES:EUR,ET:ETB,FI:EUR," +
+  "FJ:FJD,FK:FKP,FM:USD,FO:DKK,FR:EUR,GA:XAF,GB:GBP,GD:XCD,GE:GEL,GF:EUR," +
+  "GG:GBP,GH:GHS,GI:GIP,GL:DKK,GM:GMD,GN:GNF,GP:EUR,GQ:XAF,GR:EUR,GS:GBP," +
+  "GT:GTQ,GU:USD,GW:XOF,GY:GYD,HK:HKD,HM:AUD,HN:HNL,HR:EUR,HT:HTG,HU:HUF," +
+  "ID:IDR,IE:EUR,IL:ILS,IM:GBP,IN:INR,IO:USD,IQ:IQD,IR:IRR,IS:ISK,IT:EUR," +
+  "JE:GBP,JM:JMD,JO:JOD,JP:JPY,KE:KES,KG:KGS,KH:KHR,KI:AUD,KM:KMF,KN:XCD," +
+  "KP:KPW,KR:KRW,KW:KWD,KY:KYD,KZ:KZT,LA:LAK,LB:LBP,LC:XCD,LI:CHF,LK:LKR," +
+  "LR:LRD,LS:LSL,LT:EUR,LU:EUR,LV:EUR,LY:LYD,MA:MAD,MC:EUR,MD:MDL,ME:EUR," +
+  "MF:EUR,MG:MGA,MH:USD,MK:MKD,ML:XOF,MM:MMK,MN:MNT,MO:MOP,MP:USD,MQ:EUR," +
+  "MR:MRU,MS:XCD,MT:EUR,MU:MUR,MV:MVR,MW:MWK,MX:MXN,MY:MYR,MZ:MZN,NA:NAD," +
+  "NC:XPF,NE:XOF,NF:AUD,NG:NGN,NI:NIO,NL:EUR,NO:NOK,NP:NPR,NR:AUD,NU:NZD," +
+  "NZ:NZD,OM:OMR,PA:PAB,PE:PEN,PF:XPF,PG:PGK,PH:PHP,PK:PKR,PL:PLN,PM:EUR," +
+  "PN:NZD,PR:USD,PS:ILS,PT:EUR,PW:USD,PY:PYG,QA:QAR,RE:EUR,RO:RON,RS:RSD," +
+  "RU:RUB,RW:RWF,SA:SAR,SB:SBD,SC:SCR,SD:SDG,SE:SEK,SG:SGD,SH:SHP,SI:EUR," +
+  "SJ:NOK,SK:EUR,SL:SLE,SM:EUR,SN:XOF,SO:SOS,SR:SRD,SS:SSP,ST:STN,SV:USD," +
+  "SX:ANG,SY:SYP,SZ:SZL,TC:USD,TD:XAF,TF:EUR,TG:XOF,TH:THB,TJ:TJS,TK:NZD," +
+  "TL:USD,TM:TMT,TN:TND,TO:TOP,TR:TRY,TT:TTD,TV:AUD,TW:TWD,TZ:TZS,UA:UAH," +
+  "UG:UGX,UM:USD,US:USD,UY:UYU,UZ:UZS,VA:EUR,VC:XCD,VE:VES,VG:USD,VI:USD," +
+  "VN:VND,VU:VUV,WF:XPF,WS:WST,YE:YER,ZA:ZAR,ZM:ZMW,ZW:ZWL";
+
+const countryCurrency = new Map<string, string>(
+  COUNTRY_CURRENCY_DATA.split(",").map((pair) => pair.split(":") as [string, string]),
+);
+const currencyOptions = [...new Set(countryCurrency.values())].sort();
+
+// Los nombres de países y monedas salen del propio navegador, en español,
+// para no cargar una lista de 250 nombres en el bundle.
+function makeDisplayNames(type: "region" | "currency") {
+  try {
+    return new Intl.DisplayNames(["es"], { type });
+  } catch {
+    return null;
+  }
+}
+const regionDisplayNames = typeof Intl !== "undefined" ? makeDisplayNames("region") : null;
+const currencyDisplayNames = typeof Intl !== "undefined" ? makeDisplayNames("currency") : null;
+
+function countryName(code: string) {
+  try {
+    return regionDisplayNames?.of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+function currencyLabel(code: string) {
+  try {
+    const name = currencyDisplayNames?.of(code);
+    return name && name !== code ? `${code} — ${name}` : code;
+  } catch {
+    return code;
+  }
+}
+
+const countrySelectOptions = [...countryCurrency.keys()]
+  .map((code) => ({ code, name: countryName(code) }))
+  .sort((left, right) => left.name.localeCompare(right.name, "es"));
+
+function geoPlaceLabel(geo: GeoInfo) {
+  return geo.city ? `${geo.city}, ${countryName(geo.country)}` : countryName(geo.country);
+}
+
+// La ubicación detectada se recuerda por sesión para no consultar /api/geo en
+// cada recarga; sin sessionStorage (modo privado estricto) se vuelve a pedir.
+function readCachedGeo(): GeoInfo | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = window.sessionStorage.getItem(GEO_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as GeoInfo) : null;
+    return parsed && typeof parsed.country === "string" && parsed.country ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 const categories: Array<{ id: Category; label: string; short: string }> = [
   { id: "Roomies", label: "Roomies", short: "Habitaciones" },
   { id: "Depas", label: "Depas", short: "Alquiler mensual" },
@@ -174,7 +268,7 @@ const searchStopWords = new Set([
 
 const bedroomOptions = ["Todos", "1", "2", "3", "4+"] as const;
 type BedroomFilter = typeof bedroomOptions[number];
-type ListingSort = "recommended" | "newest" | "price_asc" | "price_desc" | "rating";
+type ListingSort = "recommended" | "demanded" | "fastest" | "newest" | "price_asc" | "price_desc" | "rating";
 type ListingsStatus = "loading" | "ready" | "error";
 
 type ListingsMeta = {
@@ -185,6 +279,11 @@ type ListingsMeta = {
   totalPages: number;
   hasMore: boolean;
   sort: ListingSort;
+  // Relevancia por lugar: cuántos resultados coinciden con la zona del
+  // visitante (el resto no se oculta, solo queda después).
+  near?: string;
+  nearCountry?: string | null;
+  nearMatches?: number | null;
 };
 
 type ListingsPayload = {
@@ -196,6 +295,10 @@ type ListingsPayload = {
 
 const sortOptions: Array<{ value: ListingSort; label: string }> = [
   { value: "recommended", label: "Recomendados" },
+  // Señales reales de demanda: consultas + favoritos acumulados, y consultas
+  // por día desde la publicación (los que se mueven más rápido).
+  { value: "demanded", label: "Más solicitados" },
+  { value: "fastest", label: "Se alquilan más rápido" },
   { value: "newest", label: "Más recientes" },
   { value: "price_asc", label: "Menor precio" },
   { value: "price_desc", label: "Mayor precio" },
@@ -228,7 +331,7 @@ type AdminOverviewData = {
     inquiriesLast7Days: number;
   };
   topListings: Array<{ id: number; title: string; category: string; total: number }>;
-  recentListings: Array<{ id: number; title: string; category: string; price: number; createdAt: string }>;
+  recentListings: Array<{ id: number; title: string; category: string; price: number; currency?: string; createdAt: string }>;
 };
 
 type AdminUserRow = {
@@ -329,11 +432,23 @@ function loadGoogleIdentityScript() {
   return googleIdentityScript;
 }
 
-const money = new Intl.NumberFormat("es-PE", {
-  style: "currency",
-  currency: "PEN",
-  maximumFractionDigits: 0,
-});
+// Cada anuncio se muestra en su propia moneda (código ISO 4217) sin ningún
+// tipo de cambio: el precio publicado es el precio mostrado. Los anuncios
+// peruanos (y los antiguos, sin moneda) siguen en soles.
+const moneyFormatters = new Map<string, Intl.NumberFormat>();
+function formatMoney(amount: number, currency?: string) {
+  const code = currency && /^[A-Z]{3}$/.test(currency) ? currency : "PEN";
+  let formatter = moneyFormatters.get(code);
+  if (!formatter) {
+    try {
+      formatter = new Intl.NumberFormat("es-PE", { style: "currency", currency: code, maximumFractionDigits: 0 });
+    } catch {
+      formatter = new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN", maximumFractionDigits: 0 });
+    }
+    moneyFormatters.set(code, formatter);
+  }
+  return formatter.format(amount);
+}
 
 type StayRequest = { checkIn: string; checkOut: string; guests: number };
 
@@ -1167,6 +1282,17 @@ export default function Home() {
   const [bedrooms, setBedrooms] = useState<BedroomFilter>(initialUrlState.bedrooms);
   const [selectedDepaFeatures, setSelectedDepaFeatures] = useState<DepaFeature[]>(initialUrlState.features);
   const [sort, setSort] = useState<ListingSort>(initialUrlState.sort);
+  // Ubicación del visitante por IP (GET /api/geo): la portada muestra primero
+  // lo de su zona en cualquier país. «Ver todo el mundo» apaga la prioridad y
+  // la elección se recuerda durante la sesión.
+  const [geo, setGeo] = useState<GeoInfo | null>(readCachedGeo);
+  const [geoActive, setGeoActive] = useState(() => {
+    try {
+      return typeof window === "undefined" || window.sessionStorage.getItem(GEO_WORLDWIDE_KEY) !== "1";
+    } catch {
+      return true;
+    }
+  });
   const [checkIn, setCheckIn] = useState(initialUrlState.checkIn);
   const [checkOut, setCheckOut] = useState(initialUrlState.checkOut);
   const [guestCount, setGuestCount] = useState(initialUrlState.guests);
@@ -1315,8 +1441,14 @@ export default function Home() {
       parameters.set("guests", String(guestCount));
       if (stayAmenityFilters.length) parameters.set("amenities", stayAmenityFilters.join(","));
     }
+    if (geoActive && geo) {
+      // Relevancia por lugar: no filtra, solo sube primero los anuncios de la
+      // zona detectada por IP (la lista nunca queda vacía).
+      if (geo.city) parameters.set("near", geo.city);
+      parameters.set("nearCountry", geo.country);
+    }
     return parameters.toString();
-  }, [activeCategory, bedrooms, checkIn, checkOut, debouncedMaxPrice, debouncedMinPrice, debouncedSearch, guestCount, roomiePrivateBathroom, roomieServicesIncluded, selectedDepaFeatures, service, sort, stayAmenityFilters]);
+  }, [activeCategory, bedrooms, checkIn, checkOut, debouncedMaxPrice, debouncedMinPrice, debouncedSearch, geo, geoActive, guestCount, roomiePrivateBathroom, roomieServicesIncluded, selectedDepaFeatures, service, sort, stayAmenityFilters]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1361,6 +1493,39 @@ export default function Home() {
 
     return () => controller.abort();
   }, [activeCategory, listingsQueryString, retryListings]);
+
+  // La ubicación se pide una sola vez por sesión (la copia cacheada ya entró
+  // por el inicializador del estado); si el servicio falla se asume el
+  // respaldo Perú/Lima, igual que el backend.
+  useEffect(() => {
+    if (geo) return;
+    let cancelled = false;
+    fetch("/api/geo")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("No se pudo detectar la ubicación");
+        return (await response.json()) as Partial<GeoInfo>;
+      })
+      .then((payload) => {
+        if (cancelled || !payload?.country) return;
+        const info: GeoInfo = {
+          country: payload.country,
+          city: payload.city ?? "",
+          currency: payload.currency ?? "PEN",
+        };
+        setGeo(info);
+        try {
+          window.sessionStorage.setItem(GEO_STORAGE_KEY, JSON.stringify(info));
+        } catch {
+          // Sin almacenamiento la ubicación simplemente no persiste.
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setGeo(GEO_FALLBACK);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [geo]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1608,15 +1773,20 @@ export default function Home() {
   const resultsTotal = hasDatabaseCategory ? (listingsMeta?.total ?? visibleListings.length) : visibleListings.length;
   const isInitialListingsLoad = listingsStatus === "loading" && loadedCategory !== activeCategory;
   const isRefreshingListings = listingsStatus === "loading" && loadedCategory === activeCategory;
+  // Con la ubicación detectada, los títulos hablan de la zona del visitante
+  // (en cualquier país); sin ella, o viendo todo el mundo, quedan neutrales.
+  const resultsPlace = geoActive && geo ? (geo.city || countryName(geo.country)) : "";
   const resultsTitle = search.trim()
     ? `${detail.noun.charAt(0).toUpperCase()}${detail.noun.slice(1)} para “${search.trim()}”`
     : activeCategory === "Roomies"
       ? "Habitaciones para compartir"
       : activeCategory === "Depas"
-        ? "Departamentos en Lima"
+        ? `Departamentos en ${resultsPlace || "alquiler mensual"}`
         : activeCategory === "Airbnb"
           ? "Alojamientos para tu próxima estadía"
-          : "Transporte verificado en Lima";
+          : resultsPlace
+            ? `Transporte verificado en ${resultsPlace}`
+            : "Transporte verificado";
   const singularNoun: Record<Category, string> = { Roomies: "habitación", Depas: "departamento", Airbnb: "alojamiento", Transporte: "servicio" };
   const filterButtonCount = activeCategory === "Depas"
     ? activeDepaFilterCount
@@ -1670,6 +1840,18 @@ export default function Home() {
     setShowAirbnbGuests(false);
     setShowDepaFilters(false);
     setShowMenu(false);
+  }
+
+  function toggleGeoPriority() {
+    setGeoActive((active) => {
+      const next = !active;
+      try {
+        window.sessionStorage.setItem(GEO_WORLDWIDE_KEY, next ? "0" : "1");
+      } catch {
+        // Sin almacenamiento, la preferencia dura hasta recargar.
+      }
+      return next;
+    });
   }
 
   function runSearch() {
@@ -2116,6 +2298,27 @@ export default function Home() {
             </div>
           </div>
 
+          {geo && (
+            // Ubicación detectada por IP: primero lo de la zona del visitante,
+            // con accesos directos a «Más solicitados» y «Se alquilan más
+            // rápido» y la opción de ver todo el mundo.
+            <div className="geo-banner" role="status" aria-live="polite">
+              <p>
+                <span className="geo-pin" aria-hidden="true">◉</span>
+                {geoActive ? (
+                  <>Cerca de ti: <b>{geoPlaceLabel(geo)}</b>{typeof listingsMeta?.nearMatches === "number" ? ` · ${listingsMeta.nearMatches} ${listingsMeta.nearMatches === 1 ? "anuncio" : "anuncios"} en tu zona primero` : ""}</>
+                ) : (
+                  <>Viendo anuncios de <b>todo el mundo</b></>
+                )}
+              </p>
+              <div className="geo-banner-actions">
+                <button type="button" className={sort === "demanded" ? "active" : ""} aria-pressed={sort === "demanded"} onClick={() => setSort("demanded")}>Más solicitados</button>
+                <button type="button" className={sort === "fastest" ? "active" : ""} aria-pressed={sort === "fastest"} onClick={() => setSort("fastest")}>Se alquilan más rápido</button>
+                <button type="button" className="geo-toggle" onClick={toggleGeoPriority}>{geoActive ? "Ver todo el mundo" : `Priorizar ${geoPlaceLabel(geo)}`}</button>
+              </div>
+            </div>
+          )}
+
           {activeFilterChips.length > 0 && <div className="active-filter-chips" aria-label="Filtros activos">{activeFilterChips.map((chip) => <button key={chip.key} onClick={chip.clear}>{chip.label}<span aria-hidden="true">×</span><span className="sr-only">Quitar filtro</span></button>)}<button className="clear-all-chip" onClick={resetFilters}>Limpiar todo</button></div>}
 
           {listingsStatus === "error" && <div className="results-error" role="alert"><div><strong>No pudimos actualizar los anuncios</strong><span>{listingsError}. Puedes seguir viendo las opciones disponibles.</span></div><button onClick={() => setRetryListings((value) => value + 1)}>Reintentar</button></div>}
@@ -2180,7 +2383,7 @@ export default function Home() {
                     return <div className="listing-copy depa-copy">
                       <div className="depa-title-row"><h2><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h2><ListingRating listing={listing} /></div>
                       <p className="depa-status"><strong>{details.delivery}</strong><span>·</span>{details.availability}</p>
-                      <p className="depa-rent"><span>Alquiler desde</span><strong>{money.format(listing.price)}</strong></p>
+                      <p className="depa-rent"><span>Alquiler desde</span><strong>{formatMoney(listing.price, listing.currency)}</strong></p>
                       <p className="depa-address">{details.address}</p>
                       <div className="depa-specs" aria-label="Resumen del departamento">
                         <span>{details.units} {details.units === 1 ? "unidad" : "unidades"}</span>
@@ -2200,7 +2403,7 @@ export default function Home() {
                       <p className="listing-meta">{listing.meta}</p>
                       <p className="listing-dates">{dateLabel}</p>
                       <div className="price-row">
-                        <div><p><strong>{money.format(listing.price)}</strong> <span>{listing.priceLabel}</span></p><span className="cancellation-tag">{listing.isDemo ? "Anuncio de ejemplo" : "Contacto directo"}</span></div>
+                        <div><p><strong>{formatMoney(listing.price, listing.currency)}</strong> <span>{listing.priceLabel}</span></p><span className="cancellation-tag">{listing.isDemo ? "Anuncio de ejemplo" : "Contacto directo"}</span></div>
                         <WhatsappCta listing={listing} stay={listing.category === "Airbnb" ? { checkIn, checkOut, guests: guestCount } : undefined} notify={flashNotice} />
                       </div>
                     </div>}
@@ -2249,7 +2452,7 @@ export default function Home() {
         </div>
         <div className="footer-bottom">
           <span>© 2026 {BRAND} · llaves365.com · <button className="footer-inline-link" onClick={() => setShowLegal(true)}>Privacidad</button> · <button className="footer-inline-link" onClick={() => setShowLegal(true)}>Términos</button></span>
-          <span>Español (PE) · S/ PEN</span>
+          <span>Español · Cada anuncio en su moneda local (ISO 4217), sin conversión</span>
         </div>
       </footer>
 
@@ -2309,7 +2512,7 @@ export default function Home() {
           <div className="info-content">
             <p><strong>{BRAND}</strong> es un marketplace peruano de vivienda y servicios: habitaciones para compartir (Roomies), departamentos en alquiler mensual (Depas), alojamientos por noche (Estadías) y transporte para mudanzas o traslados corporativos.</p>
             <p>Conectamos directamente a quien busca con quien publica: cada consulta se coordina por WhatsApp, sin comisiones por reserva ni intermediarios. Los anuncios se publican con un pago anual simple.</p>
-            <p>Operamos desde Lima para todo el Perú. Los anuncios marcados como «Ejemplo» son material de demostración y no corresponden a ofertas reales.</p>
+            <p>Operamos desde Lima, Perú, para todo el mundo: la portada detecta tu ciudad por tu dirección IP (sin guardar tu ubicación exacta) y muestra primero los anuncios de tu zona, cada uno con su país, ciudad y moneda local. Los anuncios marcados como «Ejemplo» son material de demostración y no corresponden a ofertas reales.</p>
             <div className="info-contact">
               <a href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer"><WhatsappIcon /> Escríbenos por WhatsApp ({CONTACT_WHATSAPP_DISPLAY})</a>
               <a href={FACEBOOK_PAGE_URL} target="_blank" rel="noopener noreferrer"><FacebookIcon /> Síguenos en Facebook</a>
@@ -2415,7 +2618,7 @@ export default function Home() {
                     <div className="favorite-copy">
                       <h3><button className="card-title-link" onClick={(event) => { event.stopPropagation(); openListing(listing); }}>{listing.title}</button></h3>
                       <span className="favorite-location">{listing.location}</span>
-                      <p className="favorite-price"><strong>{money.format(listing.price)}</strong> <em>{listing.priceLabel}</em></p>
+                      <p className="favorite-price"><strong>{formatMoney(listing.price, listing.currency)}</strong> <em>{listing.priceLabel}</em></p>
                     </div>
                     <div className="favorite-actions">
                       <WhatsappCta listing={listing} notify={flashNotice} />
@@ -2432,7 +2635,7 @@ export default function Home() {
         </Modal>
       )}
 
-      {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => {
+      {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} geo={geo} onClose={() => setShowPublish(false)} onCreated={(listing) => {
         setShowPublish(false);
         if (listing.status === "pending") {
           // Los anuncios nuevos pasan por revisión: no aparecen en la lista
@@ -2494,10 +2697,10 @@ export default function Home() {
                 <span><small>Salida</small><strong>{formatDetailDate(checkOut)}</strong></span>
               </div>
               <div className="detail-stay-guests"><span><small>Huéspedes</small><strong>{guestCount} {guestCount === 1 ? "huésped" : "huéspedes"}</strong></span><span>{airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span></div>
-              <div className="detail-stay-total"><span>{money.format(selectedListing.price)} × {airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span><strong>{money.format(selectedListing.price * airbnbNights)}</strong></div>
+              <div className="detail-stay-total"><span>{formatMoney(selectedListing.price, selectedListing.currency)} × {airbnbNights} {airbnbNights === 1 ? "noche" : "noches"}</span><strong>{formatMoney(selectedListing.price * airbnbNights, selectedListing.currency)}</strong></div>
             </div>}
             <div className="detail-benefits"><span>✓ Contacto directo con quien publica</span><span>✓ Coordinas por WhatsApp</span><span>✓ Sin comisiones</span></div>
-            <div className="detail-footer"><div><small>{selectedListing.category === "Depas" ? "Alquiler desde" : selectedListing.category === "Airbnb" ? `Total por ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}` : "Precio"}</small><strong>{selectedListing.category === "Airbnb" ? money.format(selectedListing.price * airbnbNights) : money.format(selectedListing.price)} {selectedListing.category !== "Airbnb" && <em>{selectedListing.priceLabel}</em>}</strong></div>{selectedListing.isDemo ? <button type="button" className="primary-button demo-cta" disabled title="Anuncio de ejemplo, sin contacto real">Anuncio de ejemplo</button> : <button type="button" className="primary-button" onClick={() => void contactByWhatsApp(selectedListing, { checkIn, checkOut, guests: guestCount }, (message) => flashNotice(message, "error"))}>{selectedListing.category === "Airbnb" ? "Consultar disponibilidad" : "Contactar por WhatsApp"} <Icon>↗</Icon></button>}</div>
+            <div className="detail-footer"><div><small>{selectedListing.category === "Depas" ? "Alquiler desde" : selectedListing.category === "Airbnb" ? `Total por ${airbnbNights} ${airbnbNights === 1 ? "noche" : "noches"}` : "Precio"}</small><strong>{selectedListing.category === "Airbnb" ? formatMoney(selectedListing.price * airbnbNights, selectedListing.currency) : formatMoney(selectedListing.price, selectedListing.currency)} {selectedListing.category !== "Airbnb" && <em>{selectedListing.priceLabel}</em>}</strong></div>{selectedListing.isDemo ? <button type="button" className="primary-button demo-cta" disabled title="Anuncio de ejemplo, sin contacto real">Anuncio de ejemplo</button> : <button type="button" className="primary-button" onClick={() => void contactByWhatsApp(selectedListing, { checkIn, checkOut, guests: guestCount }, (message) => flashNotice(message, "error"))}>{selectedListing.category === "Airbnb" ? "Consultar disponibilidad" : "Contactar por WhatsApp"} <Icon>↗</Icon></button>}</div>
             {!selectedListing.isDemo && <ReportListingSection listingId={selectedListing.id} notify={flashNotice} />}
           </div>
         </Modal>
@@ -2887,9 +3090,20 @@ async function uploadPublishPhotos(files: File[]): Promise<string[]> {
   return urls;
 }
 
-function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { category: Category; defaultOwnerName: string; onClose: () => void; onCreated: (listing: Listing) => void }) {
+function PublishModal({ category, defaultOwnerName, geo, onClose, onCreated }: { category: Category; defaultOwnerName: string; geo: GeoInfo | null; onClose: () => void; onCreated: (listing: Listing) => void }) {
   const [activeCategory, setActiveCategory] = useState<Category>(category);
   const [form, setForm] = useState({ title: "", location: "", price: "", description: "", ownerName: defaultOwnerName, ownerWhatsApp: "" });
+  // País, ciudad y moneda del anuncio: se sugieren con la ubicación detectada
+  // por IP y se pueden cambiar. Al cambiar de país se propone su moneda local
+  // (el precio nunca se convierte).
+  const [country, setCountry] = useState(geo?.country && countryCurrency.has(geo.country) ? geo.country : "PE");
+  const [city, setCity] = useState(geo?.city ?? "");
+  const [currency, setCurrency] = useState(geo?.currency && currencyOptions.includes(geo.currency) ? geo.currency : "PEN");
+
+  function changeCountry(code: string) {
+    setCountry(code);
+    setCurrency(countryCurrency.get(code) ?? "USD");
+  }
   const [roomieForm, setRoomieForm] = useState({ bathroom: "Compartido", bed: "1 plaza", furnished: "Sí", services: "Sí" });
   const [stayForm, setStayForm] = useState({ guests: "2", bedrooms: "1", beds: "1", bathrooms: "1" });
   const [stayAmenities, setStayAmenities] = useState<StayAmenity[]>([]);
@@ -3000,6 +3214,9 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
         body: JSON.stringify({
           ...form,
           category: activeCategory,
+          country,
+          city,
+          currency,
           price: Number(form.price),
           priceLabel: categoryDetails[activeCategory].priceLabel,
           image: gallery[0],
@@ -3031,10 +3248,13 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
       <form onSubmit={submit}>
         <div className="form-grid">
           <label>Título<input required maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder={copy.titlePlaceholder} /></label>
+          <label>País<select value={country} onChange={(event) => changeCountry(event.target.value)} aria-label="País del anuncio">{countrySelectOptions.map((option) => <option key={option.code} value={option.code}>{option.name}</option>)}</select></label>
+          <label>Ciudad<input required maxLength={80} value={city} onChange={(event) => setCity(event.target.value)} placeholder="Ej. Lima" /></label>
           <label>Distrito / zona<input required maxLength={160} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Ej. Miraflores, Lima" /></label>
-          <label>Precio en soles · {categoryDetails[activeCategory].priceLabel}<input required min="1" max="10000000" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label>
+          <label>Moneda del precio<select value={currency} onChange={(event) => setCurrency(event.target.value)} aria-label="Moneda del anuncio (ISO 4217)">{currencyOptions.map((code) => <option key={code} value={code}>{currencyLabel(code)}</option>)}</select></label>
+          <label>Precio ({currency}) · {categoryDetails[activeCategory].priceLabel}<input required min="1" max="10000000" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label>
           <label>Tu nombre<input required maxLength={80} value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label>
-          <label>WhatsApp de contacto<input required maxLength={20} inputMode="tel" value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>
+          <label>WhatsApp de contacto<small className="field-hint">Celular peruano de 9 dígitos o número internacional con el prefijo + de tu país.</small><input required maxLength={24} inputMode="tel" value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777 o +34600111222" /></label>
         </div>
         {activeCategory === "Roomies" && <fieldset className="publish-depa-fields"><legend>Datos de la habitación</legend><div className="form-grid">
           <label>Baño<select value={roomieForm.bathroom} onChange={(event) => setRoomieForm({ ...roomieForm, bathroom: event.target.value })}><option value="Privado">Privado</option><option value="Compartido">Compartido</option></select></label>
@@ -3201,7 +3421,7 @@ function AdminOverviewTab() {
       {data.recentListings.length > 0 && <>
         <h3>Publicaciones recientes</h3>
         <ul className="admin-list">
-          {data.recentListings.map((listing) => <li key={listing.id}><span>{listing.title} <small>· {categoryLabel(listing.category)} · {formatAdminDate(listing.createdAt)}</small></span><b>{money.format(listing.price)}</b></li>)}
+          {data.recentListings.map((listing) => <li key={listing.id}><span>{listing.title} <small>· {categoryLabel(listing.category)} · {formatAdminDate(listing.createdAt)}</small></span><b>{formatMoney(listing.price, listing.currency)}</b></li>)}
         </ul>
       </>}
     </div>
@@ -3520,7 +3740,7 @@ function ListingManager({ mode, onChanged, notify }: { mode: "admin" | "mine"; o
                     <i className={`status-chip status-${listing.status ?? "published"}`}>{listingStatusLabels[listing.status ?? "published"] ?? listing.status}</i>
                     {isAdmin && listing.isDemo && <i className="status-chip status-demo">Ejemplo</i>}
                   </strong>
-                  <span>{categoryLabel(listing.category)} · {money.format(listing.price)} {listing.priceLabel}</span>
+                  <span>{categoryLabel(listing.category)} · {formatMoney(listing.price, listing.currency)} {listing.priceLabel}</span>
                   <small>
                     {formatAdminDate(listing.createdAt)}
                     {isAdmin && listing.ownerEmail ? ` · ${listing.ownerEmail}` : ""}
@@ -3564,6 +3784,7 @@ function EditListingForm({ listing, isAdmin, onCancel, onSaved }: { listing: Own
   const [form, setForm] = useState({
     title: listing.title,
     location: listing.location,
+    city: listing.city ?? "",
     price: String(listing.price),
     description: listing.description,
     ownerWhatsApp: listing.ownerWhatsApp,
@@ -3580,6 +3801,7 @@ function EditListingForm({ listing, isAdmin, onCancel, onSaved }: { listing: Own
       const body: Record<string, unknown> = {
         title: form.title,
         location: form.location,
+        city: form.city,
         price: Number(form.price),
         description: form.description,
         ownerWhatsApp: form.ownerWhatsApp,
@@ -3604,9 +3826,10 @@ function EditListingForm({ listing, isAdmin, onCancel, onSaved }: { listing: Own
       <h3>Editar “{listing.title}”</h3>
       <div className="form-grid">
         <label>Título<input required maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+        <label>Ciudad<input maxLength={80} value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })} placeholder="Ej. Lima" /></label>
         <label>Ubicación<input required maxLength={160} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} /></label>
-        <label>Precio en soles<input required min="1" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} /></label>
-        <label>WhatsApp de contacto<input required value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} /></label>
+        <label>Precio ({listing.currency ?? "PEN"})<input required min="1" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} /></label>
+        <label>WhatsApp de contacto<input required maxLength={24} value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} /></label>
         {isAdmin && <label>Insignia (visible en la tarjeta)<input maxLength={60} value={form.badge} placeholder="Ej. Verificado" onChange={(event) => setForm({ ...form, badge: event.target.value })} /></label>}
       </div>
       <label>Descripción<textarea required rows={3} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
