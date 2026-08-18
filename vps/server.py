@@ -12,6 +12,7 @@ from email.parser import BytesParser
 import hashlib
 import hmac
 import io
+import ipaddress
 import json
 import math
 import mimetypes
@@ -82,6 +83,59 @@ SITE_BASE_URL = os.environ.get("LLAVES365_BASE_URL", "https://llaves365.com").rs
 RELEASE_VERSION = os.environ.get(
     "ESTADIA20_RELEASE", os.environ.get("LLAVES365_RELEASE", "dev")
 ).strip() or "dev"
+# --- Alcance mundial -------------------------------------------------------
+# Moneda local de cada país (ISO 3166-1 alfa-2 → ISO 4217). Solo sugiere y
+# valida la moneda del anuncio: el precio nunca se convierte (sin tipo de
+# cambio). La misma tabla vive en el frontend (app/page.tsx).
+_COUNTRY_CURRENCY_DATA = (
+    "AD:EUR,AE:AED,AF:AFN,AG:XCD,AI:XCD,AL:ALL,AM:AMD,AO:AOA,AQ:USD,AR:ARS,"
+    "AS:USD,AT:EUR,AU:AUD,AW:AWG,AX:EUR,AZ:AZN,BA:BAM,BB:BBD,BD:BDT,BE:EUR,"
+    "BF:XOF,BG:BGN,BH:BHD,BI:BIF,BJ:XOF,BL:EUR,BM:BMD,BN:BND,BO:BOB,BQ:USD,"
+    "BR:BRL,BS:BSD,BT:BTN,BV:NOK,BW:BWP,BY:BYN,BZ:BZD,CA:CAD,CC:AUD,CD:CDF,"
+    "CF:XAF,CG:XAF,CH:CHF,CI:XOF,CK:NZD,CL:CLP,CM:XAF,CN:CNY,CO:COP,CR:CRC,"
+    "CU:CUP,CV:CVE,CW:ANG,CX:AUD,CY:EUR,CZ:CZK,DE:EUR,DJ:DJF,DK:DKK,DM:XCD,"
+    "DO:DOP,DZ:DZD,EC:USD,EE:EUR,EG:EGP,EH:MAD,ER:ERN,ES:EUR,ET:ETB,FI:EUR,"
+    "FJ:FJD,FK:FKP,FM:USD,FO:DKK,FR:EUR,GA:XAF,GB:GBP,GD:XCD,GE:GEL,GF:EUR,"
+    "GG:GBP,GH:GHS,GI:GIP,GL:DKK,GM:GMD,GN:GNF,GP:EUR,GQ:XAF,GR:EUR,GS:GBP,"
+    "GT:GTQ,GU:USD,GW:XOF,GY:GYD,HK:HKD,HM:AUD,HN:HNL,HR:EUR,HT:HTG,HU:HUF,"
+    "ID:IDR,IE:EUR,IL:ILS,IM:GBP,IN:INR,IO:USD,IQ:IQD,IR:IRR,IS:ISK,IT:EUR,"
+    "JE:GBP,JM:JMD,JO:JOD,JP:JPY,KE:KES,KG:KGS,KH:KHR,KI:AUD,KM:KMF,KN:XCD,"
+    "KP:KPW,KR:KRW,KW:KWD,KY:KYD,KZ:KZT,LA:LAK,LB:LBP,LC:XCD,LI:CHF,LK:LKR,"
+    "LR:LRD,LS:LSL,LT:EUR,LU:EUR,LV:EUR,LY:LYD,MA:MAD,MC:EUR,MD:MDL,ME:EUR,"
+    "MF:EUR,MG:MGA,MH:USD,MK:MKD,ML:XOF,MM:MMK,MN:MNT,MO:MOP,MP:USD,MQ:EUR,"
+    "MR:MRU,MS:XCD,MT:EUR,MU:MUR,MV:MVR,MW:MWK,MX:MXN,MY:MYR,MZ:MZN,NA:NAD,"
+    "NC:XPF,NE:XOF,NF:AUD,NG:NGN,NI:NIO,NL:EUR,NO:NOK,NP:NPR,NR:AUD,NU:NZD,"
+    "NZ:NZD,OM:OMR,PA:PAB,PE:PEN,PF:XPF,PG:PGK,PH:PHP,PK:PKR,PL:PLN,PM:EUR,"
+    "PN:NZD,PR:USD,PS:ILS,PT:EUR,PW:USD,PY:PYG,QA:QAR,RE:EUR,RO:RON,RS:RSD,"
+    "RU:RUB,RW:RWF,SA:SAR,SB:SBD,SC:SCR,SD:SDG,SE:SEK,SG:SGD,SH:SHP,SI:EUR,"
+    "SJ:NOK,SK:EUR,SL:SLE,SM:EUR,SN:XOF,SO:SOS,SR:SRD,SS:SSP,ST:STN,SV:USD,"
+    "SX:ANG,SY:SYP,SZ:SZL,TC:USD,TD:XAF,TF:EUR,TG:XOF,TH:THB,TJ:TJS,TK:NZD,"
+    "TL:USD,TM:TMT,TN:TND,TO:TOP,TR:TRY,TT:TTD,TV:AUD,TW:TWD,TZ:TZS,UA:UAH,"
+    "UG:UGX,UM:USD,US:USD,UY:UYU,UZ:UZS,VA:EUR,VC:XCD,VE:VES,VG:USD,VI:USD,"
+    "VN:VND,VU:VUV,WF:XPF,WS:WST,YE:YER,ZA:ZAR,ZM:ZMW,ZW:ZWL"
+)
+COUNTRY_CURRENCIES: dict[str, str] = dict(
+    pair.split(":") for pair in _COUNTRY_CURRENCY_DATA.split(",")
+)
+COUNTRY_CODES = frozenset(COUNTRY_CURRENCIES)
+CURRENCY_CODES = frozenset(COUNTRY_CURRENCIES.values())
+DEFAULT_COUNTRY = "PE"
+DEFAULT_CURRENCY = COUNTRY_CURRENCIES[DEFAULT_COUNTRY]
+# GET /api/geo ubica al visitante por su IP (X-Real-IP, que nginx sobrescribe
+# con la dirección real). Usa servicios gratuitos sin clave y, si la IP es
+# privada o la consulta falla, responde el respaldo Perú/Lima.
+GEO_FALLBACK_CITY = "Lima"
+GEO_LOOKUP_TIMEOUT_SECONDS = 2.5
+GEO_CACHE_TTL_SECONDS = 6 * 60 * 60
+GEO_CACHE_MAX_ENTRIES = 5_000
+_GEO_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
+_GEO_CACHE_LOCK = threading.Lock()
+# Servicios de geolocalización por IP gratuitos y sin clave (sin claves de
+# pago): se intentan en orden y se acepta la primera respuesta válida.
+GEO_PROVIDERS = (
+    "https://ipwho.is/{ip}",
+    "http://ip-api.com/json/{ip}?fields=status,countryCode,city&lang=es",
+)
 PASSWORD_ITERATIONS = 310_000
 # Los tokens de «olvidé mi contraseña» viven 45 minutos y se guardan con hash;
 # el token en claro solo se registra en los logs del servidor (no hay SMTP aún).
@@ -142,12 +196,25 @@ DEPA_FEATURES = {
 ROOMIE_BATHROOM_OPTIONS = {"Privado", "Compartido"}
 ROOMIE_BED_OPTIONS = {"1 plaza", "1.5 plazas", "2 plazas"}
 STAY_AMENITIES = ("Wifi", "Cocina", "Estacionamiento", "Piscina")
+# Señales de demanda para los órdenes «Más solicitados» y «Se alquilan más
+# rápido»: consultas y favoritos acumulados, y consultas por día desde que se
+# publicó (los anuncios que reciben contactos más rápido suben primero).
+LISTING_DEMAND_SQL = (
+    "((SELECT COUNT(*) FROM inquiries WHERE inquiries.listing_id = listings.id)"
+    " + (SELECT COUNT(*) FROM favorites WHERE favorites.listing_id = listings.id))"
+)
+LISTING_SPEED_SQL = (
+    "(CAST((SELECT COUNT(*) FROM inquiries WHERE inquiries.listing_id = listings.id) AS REAL)"
+    " / (MAX(julianday('now') - julianday(listings.created_at), 0.0) + 1.0))"
+)
 LISTING_SORTS = {
     "recommended": "(badge IS NOT NULL) DESC, rating DESC, reviews DESC, created_at DESC, id DESC",
     "newest": "created_at DESC, id DESC",
     "price_asc": "price ASC, rating DESC, id DESC",
     "price_desc": "price DESC, rating DESC, id DESC",
     "rating": "rating DESC, reviews DESC, id DESC",
+    "demanded": f"{LISTING_DEMAND_SQL} DESC, rating DESC, reviews DESC, created_at DESC, id DESC",
+    "fastest": f"{LISTING_SPEED_SQL} DESC, {LISTING_DEMAND_SQL} DESC, created_at DESC, id DESC",
 }
 # Nombres cortos que llegan en enlaces compartidos (?sort=price); cualquier
 # otro valor desconocido sigue respondiendo 400.
@@ -172,6 +239,9 @@ RATE_LIMIT_RULES = {
     # Límite de lectura moderado para frenar el raspado masivo de anuncios sin
     # afectar la navegación normal (la lista pagina de a 24 y cachea con ETag).
     ("GET", "/api/listings"): (240, 60),
+    # La geolocalización por IP se cachea en el servidor y en el navegador;
+    # nadie necesita consultarla decenas de veces por minuto.
+    ("GET", "/api/geo"): (30, 60),
 }
 _RATE_LIMIT_BUCKETS: dict[tuple[str, str, str], deque[float]] = defaultdict(deque)
 _RATE_LIMIT_LOCK = threading.Lock()
@@ -454,8 +524,25 @@ def initialize_database() -> None:
             )
         if "updated_at" not in listing_columns:
             database.execute("ALTER TABLE listings ADD COLUMN updated_at TEXT")
+        # Alcance mundial: país (ISO 3166-1 alfa-2), ciudad y moneda (ISO
+        # 4217) del anuncio. Los anuncios anteriores quedan en Perú con soles.
+        if "country" not in listing_columns:
+            database.execute(
+                "ALTER TABLE listings ADD COLUMN country TEXT NOT NULL DEFAULT 'PE'"
+            )
+        if "city" not in listing_columns:
+            database.execute(
+                "ALTER TABLE listings ADD COLUMN city TEXT NOT NULL DEFAULT ''"
+            )
+        if "currency" not in listing_columns:
+            database.execute(
+                "ALTER TABLE listings ADD COLUMN currency TEXT NOT NULL DEFAULT 'PEN'"
+            )
         database.execute(
             "CREATE INDEX IF NOT EXISTS idx_listings_status ON listings (status)"
+        )
+        database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_listings_country ON listings (country)"
         )
         inquiry_columns = {
             row["name"] for row in database.execute("PRAGMA table_info(inquiries)")
@@ -798,6 +885,80 @@ class GoogleAccountError(Exception):
         self.status = status
 
 
+def is_public_ip(value: str) -> bool:
+    """Solo las IP públicas se consultan a los servicios de geolocalización;
+    las privadas, loopback o inválidas van directo al respaldo Perú/Lima."""
+    try:
+        return ipaddress.ip_address(str(value or "").strip()).is_global
+    except ValueError:
+        return False
+
+
+def fetch_geo_for_ip(ip: str) -> tuple[str, str] | None:
+    """Consulta los servicios keyless en orden y devuelve (país, ciudad) o
+    None si ninguno respondió algo utilizable. Las pruebas reemplazan esta
+    función para no depender de la red."""
+    for template in GEO_PROVIDERS:
+        url = template.format(ip=ip)
+        try:
+            request = urllib_request.Request(url, headers={"User-Agent": "llaves365-geo/1.0"})
+            with urllib_request.urlopen(request, timeout=GEO_LOOKUP_TIMEOUT_SECONDS) as response:
+                payload = json.loads(response.read(64 * 1024))
+        except (urllib_error.URLError, TimeoutError, OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        # ipwho.is responde success/country_code; ip-api responde
+        # status=success/countryCode. Se aceptan ambos formatos.
+        if payload.get("success") is False or payload.get("status") == "fail":
+            continue
+        country = str(payload.get("country_code") or payload.get("countryCode") or "").strip().upper()
+        if country not in COUNTRY_CODES:
+            continue
+        city = str(payload.get("city") or "").strip()[:80]
+        return country, city
+    return None
+
+
+def geo_fallback() -> dict[str, str]:
+    return {
+        "country": DEFAULT_COUNTRY,
+        "city": GEO_FALLBACK_CITY,
+        "currency": DEFAULT_CURRENCY,
+        "source": "fallback",
+    }
+
+
+def resolve_geo(ip: str) -> dict[str, str]:
+    """Ubica la IP del visitante con caché en memoria. Nunca lanza: cualquier
+    problema (IP privada, servicio caído, respuesta rara) termina en el
+    respaldo Perú/Lima para que la portada siempre cargue."""
+    if not is_public_ip(ip):
+        return geo_fallback()
+    now = time.monotonic()
+    with _GEO_CACHE_LOCK:
+        cached = _GEO_CACHE.get(ip)
+        if cached and cached[0] > now:
+            return {**cached[1], "source": "cache"}
+    try:
+        result = fetch_geo_for_ip(ip)
+    except Exception:  # el geolocalizador nunca tumba la petición
+        result = None
+    if result is None:
+        return geo_fallback()
+    country, city = result
+    resolved = {
+        "country": country,
+        "city": city,
+        "currency": COUNTRY_CURRENCIES.get(country, "USD"),
+    }
+    with _GEO_CACHE_LOCK:
+        if len(_GEO_CACHE) >= GEO_CACHE_MAX_ENTRIES:
+            _GEO_CACHE.clear()
+        _GEO_CACHE[ip] = (now + GEO_CACHE_TTL_SECONDS, resolved)
+    return {**resolved, "source": "lookup"}
+
+
 def masked_whatsapp(number: object) -> str:
     """Oculta el número de WhatsApp en las respuestas públicas: se conservan
     el prefijo del país y los últimos dos dígitos (ej. 519•••••••77)."""
@@ -819,6 +980,29 @@ def normalize_peru_whatsapp(value: object) -> str | None:
     return None
 
 
+def normalize_whatsapp(value: object) -> str | None:
+    """WhatsApp de contacto para anuncios de todo el mundo, guardado en
+    formato E.164 sin el «+» (solo dígitos con el código del país):
+    - Con el prefijo «+» se acepta cualquier número internacional E.164
+      (8 a 15 dígitos, sin empezar en 0), p. ej. «+34 600 111 222».
+    - Sin «+» se mantiene la regla histórica peruana: un celular de 9 dígitos
+      que empieza con 9 (o ya prefijado 519XXXXXXXX), guardado 51XXXXXXXXX."""
+    text = str(value or "").strip()
+    if not text.startswith("+"):
+        return normalize_peru_whatsapp(text)
+    digits = re.sub(r"\D", "", text)
+    if 8 <= len(digits) <= 15 and not digits.startswith("0"):
+        return digits
+    return None
+
+
+WHATSAPP_ERROR_MESSAGE = (
+    "Ingresa un WhatsApp válido: un celular peruano de 9 dígitos que empiece "
+    "con 9 (se guarda como 51XXXXXXXXX) o, si estás fuera de Perú, tu número "
+    "internacional con el prefijo + de tu país (formato E.164)."
+)
+
+
 def listing_dict(row: sqlite3.Row, include_contact: bool = False) -> dict[str, object]:
     try:
         gallery = json.loads(row["gallery"])
@@ -833,6 +1017,11 @@ def listing_dict(row: sqlite3.Row, include_contact: bool = False) -> dict[str, o
         "category": row["category"],
         "title": row["title"],
         "location": row["location"],
+        # Ubicación estructurada del anuncio (mundial) y su moneda ISO 4217.
+        # El precio se muestra siempre en la moneda publicada, sin conversión.
+        "country": row["country"],
+        "city": row["city"],
+        "currency": row["currency"],
         "description": row["description"],
         "image": row["image"],
         "gallery": gallery,
@@ -1205,6 +1394,29 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
     if sort not in LISTING_SORTS:
         raise ValueError("Orden inválido")
 
+    # Relevancia por lugar (mundial): `near` (ciudad detectada por IP) y
+    # `nearCountry` no filtran, solo suben primero los anuncios de esa zona;
+    # así la lista nunca queda vacía si el visitante está en una ciudad sin
+    # anuncios todavía.
+    near_city = str(parameters.get("near", [""])[0]).strip()[:80]
+    near_country = str(parameters.get("nearCountry", [""])[0]).strip().upper()
+    if near_country and near_country not in COUNTRY_CODES:
+        raise ValueError("País inválido")
+    normalized_near = normalize_search_text(near_city)
+    place_parts: list[str] = []
+    place_values: list[object] = []
+    if normalized_near:
+        # La ciudad coincide contra el campo estructurado y contra el texto
+        # libre de ubicación (los anuncios antiguos no tienen ciudad).
+        place_parts.append(
+            "(search_matches(search_normalize(city || ' ' || location), ?) * 2)"
+        )
+        place_values.append(normalized_near)
+    if near_country:
+        place_parts.append("(CASE WHEN country = ? THEN 1 ELSE 0 END)")
+        place_values.append(near_country)
+    place_expression = " + ".join(place_parts) if place_parts else None
+
     # Solo los anuncios publicados son visibles en la lista pública; los
     # pendientes, pausados, alquilados o rechazados no aparecen.
     clauses: list[str] = ["status = 'published'"]
@@ -1296,7 +1508,11 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
         values.append(" ".join(search_tokens))
 
     where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    order_clause = LISTING_SORTS[sort]
+    if place_expression is not None:
+        order_clause = f"({place_expression}) DESC, {order_clause}"
     offset = (page - 1) * page_size
+    near_matches: int | None = None
     with connect() as database:
         category_total = database.execute(
             "SELECT COUNT(*) FROM listings WHERE status = 'published'"
@@ -1306,13 +1522,20 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
         total = database.execute(
             f"SELECT COUNT(*) FROM listings{where_clause}", values
         ).fetchone()[0]
+        if place_expression is not None:
+            # Cuántos resultados son de la zona del visitante: la interfaz lo
+            # muestra («N anuncios en tu zona») sin filtrar los demás.
+            near_matches = database.execute(
+                f"SELECT COUNT(*) FROM listings{where_clause} AND ({place_expression}) > 0",
+                [*values, *place_values],
+            ).fetchone()[0]
         rows = database.execute(
-            f"SELECT * FROM listings{where_clause} ORDER BY {LISTING_SORTS[sort]} LIMIT ? OFFSET ?",
-            [*values, page_size, offset],
+            f"SELECT * FROM listings{where_clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
+            [*values, *place_values, page_size, offset],
         ).fetchall()
 
     total_pages = max(1, math.ceil(total / page_size))
-    return rows, {
+    metadata: dict[str, object] = {
         "total": total,
         "categoryTotal": category_total,
         "page": page,
@@ -1321,6 +1544,11 @@ def listings_query(parameters: dict[str, list[str]]) -> tuple[list[sqlite3.Row],
         "hasMore": page < total_pages,
         "sort": sort,
     }
+    if place_expression is not None:
+        metadata["near"] = near_city
+        metadata["nearCountry"] = near_country or None
+        metadata["nearMatches"] = near_matches
+    return rows, metadata
 
 
 def sanitize_depa_details(value: object, location: str) -> dict[str, object]:
@@ -1701,6 +1929,13 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             # o una cancelación, así que se vuelve al inicio sin sesión.
             self.send_redirect("/", HTTPStatus.FOUND, clear_oauth_state=True)
             return
+        if parsed.path == "/api/geo":
+            # Ubicación del visitante por IP (X-Real-IP puesto por nginx),
+            # sin claves de pago y con respaldo Perú/Lima si algo falla.
+            if not self.check_rate_limit("GET", "/api/geo"):
+                return
+            self.send_json(resolve_geo(self.client_ip()), cache_control="private, max-age=900")
+            return
         if parsed.path == "/api/listings":
             # Límite de lectura moderado compartido entre la lista y el
             # detalle: reduce el raspado masivo sin frenar la navegación.
@@ -2017,7 +2252,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             ).fetchall()
             recent_rows = database.execute(
                 """
-                SELECT id, title, category, price, created_at
+                SELECT id, title, category, price, currency, created_at
                 FROM listings ORDER BY created_at DESC, id DESC LIMIT 5
                 """
             ).fetchall()
@@ -2046,6 +2281,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                         "title": row["title"],
                         "category": row["category"],
                         "price": row["price"],
+                        "currency": row["currency"],
                         "createdAt": row["created_at"],
                     }
                     for row in recent_rows
@@ -2584,19 +2820,35 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     return
                 updates["owner_name"] = owner_name
             if "ownerWhatsApp" in payload:
-                owner_whatsapp = normalize_peru_whatsapp(payload["ownerWhatsApp"])
+                owner_whatsapp = normalize_whatsapp(payload["ownerWhatsApp"])
                 if owner_whatsapp is None:
                     self.send_json(
-                        {
-                            "error": (
-                                "Ingresa un WhatsApp peruano válido: un celular "
-                                "de 9 dígitos que empiece con 9."
-                            )
-                        },
+                        {"error": WHATSAPP_ERROR_MESSAGE},
                         HTTPStatus.BAD_REQUEST,
                     )
                     return
                 updates["owner_whatsapp"] = owner_whatsapp
+            if "country" in payload:
+                country = str(payload["country"] or "").strip().upper()
+                if country not in COUNTRY_CODES:
+                    self.send_json({"error": "Elige un país válido."}, HTTPStatus.BAD_REQUEST)
+                    return
+                updates["country"] = country
+            if "city" in payload:
+                city = str(payload["city"] or "").strip()
+                if len(city) > 80:
+                    self.send_json({"error": "La ciudad no es válida."}, HTTPStatus.BAD_REQUEST)
+                    return
+                updates["city"] = city
+            if "currency" in payload:
+                currency = str(payload["currency"] or "").strip().upper()
+                if currency not in CURRENCY_CODES:
+                    self.send_json(
+                        {"error": "Elige una moneda válida (código ISO 4217)."},
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                updates["currency"] = currency
             if "status" in payload:
                 new_status = str(payload["status"] or "").strip()
                 if new_status not in LISTING_STATUSES:
@@ -3083,16 +3335,29 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         location = str(payload.get("location", "")).strip()
         description = str(payload.get("description", "")).strip()
         owner_name = str(payload.get("ownerName", "")).strip()
-        owner_whatsapp = normalize_peru_whatsapp(payload.get("ownerWhatsApp", ""))
+        owner_whatsapp = normalize_whatsapp(payload.get("ownerWhatsApp", ""))
         price = parse_price(payload.get("price", 0))
         if owner_whatsapp is None:
+            self.send_json({"error": WHATSAPP_ERROR_MESSAGE}, HTTPStatus.BAD_REQUEST)
+            return
+        # País, ciudad y moneda del anuncio (mundial). Sin país se asume Perú
+        # y la moneda por defecto es la local del país elegido; el precio se
+        # guarda tal cual, nunca se convierte (sin tipo de cambio).
+        country = str(payload.get("country", "") or "").strip().upper() or DEFAULT_COUNTRY
+        if country not in COUNTRY_CODES:
+            self.send_json({"error": "Elige un país válido."}, HTTPStatus.BAD_REQUEST)
+            return
+        city = str(payload.get("city", "") or "").strip()
+        if len(city) > 80:
+            self.send_json({"error": "La ciudad no es válida."}, HTTPStatus.BAD_REQUEST)
+            return
+        currency = (
+            str(payload.get("currency", "") or "").strip().upper()
+            or COUNTRY_CURRENCIES.get(country, DEFAULT_CURRENCY)
+        )
+        if currency not in CURRENCY_CODES:
             self.send_json(
-                {
-                    "error": (
-                        "Ingresa un WhatsApp peruano válido: un celular de 9 "
-                        "dígitos que empiece con 9 (se guarda como 51XXXXXXXXX)."
-                    )
-                },
+                {"error": "Elige una moneda válida (código ISO 4217)."},
                 HTTPStatus.BAD_REQUEST,
             )
             return
@@ -3188,15 +3453,19 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             cursor = database.execute(
                 """
                 INSERT INTO listings
-                  (category, title, location, description, image, gallery, price,
-                   price_label, rating, reviews, meta, owner_name, owner_whatsapp,
-                   service, details_json, user_id, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 5, 0, ?, ?, ?, ?, ?, ?, ?)
+                  (category, title, location, country, city, currency,
+                   description, image, gallery, price, price_label, rating,
+                   reviews, meta, owner_name, owner_whatsapp, service,
+                   details_json, user_id, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 5, 0, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     category,
                     title,
                     location,
+                    country,
+                    city,
+                    currency,
                     description,
                     image,
                     json.dumps(gallery, ensure_ascii=False),
