@@ -292,7 +292,6 @@ type GoogleIdentityClient = {
       locale?: string;
     },
   ) => void;
-  disableAutoSelect: () => void;
 };
 
 declare global {
@@ -327,6 +326,29 @@ function loadGoogleIdentityScript() {
     throw error;
   });
   return googleIdentityScript;
+}
+
+const GOOGLE_AUTHORIZE_PREFIX = "https://accounts.google.com/o/oauth2/v2/auth?";
+
+async function startGoogleOAuthRedirect() {
+  // Primero se fija estadia20_oauth en un fetch mismo origen. Un
+  // location.assign directo a /start (200 + meta a Google) lo trata Safari
+  // como rebote y tira la cookie; el callback falla y parece que Google
+  // te botó.
+  try {
+    const response = await fetch("/api/auth/google/start", {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    const payload = (await response.json().catch(() => ({}))) as { authorizeUrl?: string };
+    const authorizeUrl = payload.authorizeUrl ?? "";
+    if (!response.ok || !authorizeUrl.startsWith(GOOGLE_AUTHORIZE_PREFIX)) {
+      throw new Error("invalid");
+    }
+    window.location.assign(authorizeUrl);
+  } catch {
+    window.location.assign("/api/auth/google/start");
+  }
 }
 
 const money = new Intl.NumberFormat("es-PE", {
@@ -1364,7 +1386,7 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/auth/me")
+    fetch("/api/auth/me", { credentials: "include" })
       .then(async (response) => {
         if (!response.ok) throw new Error("No se pudo verificar la sesión");
         return (await response.json()) as { user?: AuthUser | null };
@@ -1393,15 +1415,42 @@ export default function Home() {
 
   useEffect(() => {
     if (!oauthRedirectResult) return;
-    const timer = window.setTimeout(() => {
-      if (oauthRedirectResult === "google-ok") flashNotice("Sesión iniciada con Google");
-      if (oauthRedirectResult === "google-error") {
-        setShowLogin(true);
-        flashNotice("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error");
-      }
+    let cancelled = false;
+    const finish = (message: string, tone: "success" | "error" = "success", openLogin = false) => {
+      if (cancelled) return;
+      if (openLogin) setShowLogin(true);
+      flashNotice(message, tone);
       setOauthRedirectResult(null);
-    }, 0);
-    return () => window.clearTimeout(timer);
+    };
+    if (oauthRedirectResult === "google-ok") {
+      fetch("/api/auth/me", { credentials: "include" })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("No se pudo verificar la sesión");
+          return (await response.json()) as { user?: AuthUser | null };
+        })
+        .then((payload) => {
+          if (payload.user) {
+            setCurrentUser(payload.user);
+            finish("Sesión iniciada con Google");
+            return;
+          }
+          finish("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error", true);
+        })
+        .catch(() => {
+          finish("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error", true);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (oauthRedirectResult === "google-error") {
+      finish("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error", true);
+    } else {
+      setOauthRedirectResult(null);
+    }
+    return () => {
+      cancelled = true;
+    };
   }, [oauthRedirectResult]);
 
   useEffect(() => {
@@ -2589,7 +2638,7 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
 
     async function configureGoogle() {
       try {
-        const response = await fetch("/api/auth/config");
+        const response = await fetch("/api/auth/config", { credentials: "include" });
         const config = (await response.json()) as { googleEnabled?: boolean; googleClientId?: string };
         if (!response.ok || !config.googleEnabled || !config.googleClientId) {
           if (!cancelled) setGoogleFlowEnabled(false);
@@ -2604,6 +2653,7 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
           try {
             const authResponse = await fetch("/api/auth/google", {
               method: "POST",
+              credentials: "include",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ credential }),
             });
@@ -2617,6 +2667,9 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
           }
         };
         googleButtonRef.current.replaceChildren();
+        // Solo el botón GIS: no se llama prompt(), ni revoke, ni se cierra
+        // la sesión de Google del navegador. La sesión de Llaves365 vive en
+        // la cookie HttpOnly; cerrar sesión del sitio no toca Google.
         window.google.accounts.id.initialize({
           client_id: config.googleClientId,
           callback: (credentialResponse) => {
@@ -2679,6 +2732,7 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
     try {
       const response = await fetch(`/api/auth/${mode === "login" ? "login" : "register"}`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
@@ -2696,9 +2750,11 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
     setIsSaving(true);
     setError("");
     try {
-      const response = await fetch(allDevices ? "/api/auth/logout-all" : "/api/auth/logout", { method: "POST" });
+      const response = await fetch(allDevices ? "/api/auth/logout-all" : "/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
       if (!response.ok) throw new Error("No se pudo cerrar la sesión");
-      window.google?.accounts.id.disableAutoSelect();
       if (allDevices) notify?.("Cerramos tu sesión en todos los equipos.");
       onLoggedOut();
     } catch (logoutError) {
@@ -2795,7 +2851,7 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
                 type="button"
                 className="google-cta-button"
                 disabled={!googleFlowEnabled || isSaving}
-                onClick={() => window.location.assign("/api/auth/google/start")}
+                onClick={() => void startGoogleOAuthRedirect()}
               >
                 <GoogleGIcon />
                 <span>Continuar con Google</span>
