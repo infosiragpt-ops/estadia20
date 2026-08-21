@@ -423,6 +423,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .publish-category-switch button { flex: 1; min-height: 38px; padding: 8px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 700; }
 .publish-category-switch button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
 .field-hint { color: var(--muted); font-size: 10px; font-weight: 400; line-height: 1.4; }
+.publish-profile-hint { margin: 8px 0 0; color: var(--muted); font-size: 10px; font-weight: 400; line-height: 1.4; }
 /* Cuadrícula de hasta 15 fotos: la primera es la portada, un toque en otra
    foto la convierte en portada y la × la quita. */
 .photo-uploader { margin-top: 17px; }

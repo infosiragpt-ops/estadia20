@@ -24,7 +24,10 @@ const BRAND_MARK = "llaves365";
 // ayuda siempre usan estos canales; no hay correo de soporte.
 const FACEBOOK_PAGE_URL = "https://www.facebook.com/profile.php?id=61592602154789";
 const CONTACT_WHATSAPP_DISPLAY = "+51 918 714 054";
-const CONTACT_WHATSAPP_URL = `https://wa.me/51918714054?text=${encodeURIComponent("Hola, les escribo desde llaves365.com")}`;
+// Solo el «Contacto» del sitio (pie/cabecera). El chat de un anuncio usa el
+// WhatsApp que el anunciante registró al publicar, nunca este número.
+const SITE_WHATSAPP_E164 = "51918714054";
+const CONTACT_WHATSAPP_URL = `https://wa.me/${SITE_WHATSAPP_E164}?text=${encodeURIComponent("Hola, les escribo desde llaves365.com")}`;
 // Aviso de cookies (Ley 29733): se muestra una vez por visitante y el cierre
 // queda guardado en localStorage.
 const COOKIE_CONSENT_STORAGE_KEY = "llaves365-cookie-consent";
@@ -112,6 +115,75 @@ function saveGoogleNudgeMemory(patch: GoogleNudgeMemory) {
   } catch {
     // Sin localStorage (modo privado estricto) el aviso simplemente no persiste.
   }
+}
+
+// Datos de contacto del anunciante: el servidor es la fuente de verdad para
+// cuentas. localStorage cubre al visitante que vuelve al mismo navegador
+// (o el instante antes de que /api/auth/me responda). No se guardan título,
+// precio, fotos ni los campos de la habitación.
+const PUBLISHER_PROFILE_STORAGE_KEY = "llaves365-publisher-profile";
+
+type PublisherProfile = {
+  ownerName: string;
+  ownerWhatsApp: string;
+  location: string;
+};
+
+function emptyPublisherProfile(): PublisherProfile {
+  return { ownerName: "", ownerWhatsApp: "", location: "" };
+}
+
+function readPublisherProfile(): PublisherProfile {
+  try {
+    if (typeof window === "undefined") return emptyPublisherProfile();
+    const raw = window.localStorage.getItem(PUBLISHER_PROFILE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) as Partial<PublisherProfile> : null;
+    if (!parsed || typeof parsed !== "object") return emptyPublisherProfile();
+    return {
+      ownerName: typeof parsed.ownerName === "string" ? parsed.ownerName.trim() : "",
+      ownerWhatsApp: typeof parsed.ownerWhatsApp === "string" ? parsed.ownerWhatsApp.trim() : "",
+      location: typeof parsed.location === "string" ? parsed.location.trim() : "",
+    };
+  } catch {
+    return emptyPublisherProfile();
+  }
+}
+
+function writePublisherProfile(profile: Partial<PublisherProfile>) {
+  try {
+    const current = readPublisherProfile();
+    const next: PublisherProfile = {
+      ownerName: (profile.ownerName ?? "").trim() || current.ownerName,
+      ownerWhatsApp: (profile.ownerWhatsApp ?? "").trim() || current.ownerWhatsApp,
+      location: (profile.location ?? "").trim() || current.location,
+    };
+    window.localStorage.setItem(PUBLISHER_PROFILE_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Sin localStorage (modo privado) el formulario sigue; solo no recuerda aquí.
+  }
+}
+
+function accountNameFallback(account: AuthUser | null): string {
+  // El nombre de Google (o el de registro) solo se usa la primera vez, cuando
+  // todavía no hay un nombre de anunciante guardado.
+  return (account?.name ?? "").trim();
+}
+
+function publisherFormDefaults(account: AuthUser | null): PublisherProfile {
+  const local = readPublisherProfile();
+  const serverName = (account?.publisherName ?? "").trim();
+  const serverWhatsApp = (account?.publisherWhatsApp ?? "").trim();
+  const serverLocation = (account?.publisherLocation ?? "").trim();
+  return {
+    ownerName: serverName || local.ownerName || accountNameFallback(account),
+    ownerWhatsApp: serverWhatsApp || local.ownerWhatsApp,
+    location: serverLocation || local.location,
+  };
+}
+
+function mergeAccountOverLocal(account: AuthUser | null) {
+  if (!account) return;
+  writePublisherProfile(publisherFormDefaults(account));
 }
 
 const MAX_PUBLISH_PHOTOS = 15;
@@ -209,6 +281,9 @@ type AuthUser = {
   avatarUrl: string;
   authProvider: "google" | "password";
   role: "admin" | "user";
+  publisherName?: string;
+  publisherWhatsApp?: string;
+  publisherLocation?: string;
 };
 
 type OwnedListing = Listing & {
@@ -337,14 +412,29 @@ const money = new Intl.NumberFormat("es-PE", {
 
 type StayRequest = { checkIn: string; checkOut: string; guests: number };
 
-function whatsappUrl(number: string, listing: Listing, stay?: StayRequest) {
+function normalizePublisherWhatsApp(value: string): string | null {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 9 && digits.startsWith("9")) return `51${digits}`;
+  if (digits.length === 11 && digits.startsWith("519")) return digits;
+  return null;
+}
+
+function publisherContactUrl(number: string, listing: Listing, stay?: StayRequest): string | null {
+  // El chat de un anuncio va al celular del anunciante. No se usa el WhatsApp
+  // del sitio (SITE_WHATSAPP_E164) si el anuncio no tiene un número válido.
+  const normalized = normalizePublisherWhatsApp(number);
+  if (!normalized) return null;
   const stayDetails = listing.category === "Airbnb" && stay
     ? ` para llegar el ${formatShortDate(stay.checkIn)}, salir el ${formatShortDate(stay.checkOut)} y ${stay.guests} ${stay.guests === 1 ? "huésped" : "huéspedes"}`
     : "";
   const message = encodeURIComponent(
     `Hola ${listing.ownerName}, vi “${listing.title}” en ${BRAND} y me gustaría consultar disponibilidad${stayDetails}.`,
   );
-  return `https://wa.me/${number}?text=${message}`;
+  return `https://wa.me/${normalized}?text=${message}`;
+}
+
+function whatsappUrl(number: string, listing: Listing, stay?: StayRequest) {
+  return publisherContactUrl(number, listing, stay) ?? "";
 }
 
 function listingImages(listing: Listing) {
@@ -365,11 +455,12 @@ async function revealWhatsApp(listing: Listing, stay?: StayRequest): Promise<str
       guests: listing.category === "Airbnb" ? stay?.guests : undefined,
     }),
   });
-  const payload = (await response.json().catch(() => ({}))) as { whatsapp?: string | null; error?: string };
-  if (!response.ok || !payload.whatsapp) {
+  const payload = (await response.json().catch(() => ({}))) as { whatsapp?: string | null; whatsappUrl?: string | null; error?: string };
+  const number = normalizePublisherWhatsApp(payload.whatsapp ?? "");
+  if (!response.ok || !number) {
     throw new Error(payload.error ?? "No pudimos abrir el WhatsApp de este anuncio. Inténtalo otra vez.");
   }
-  return payload.whatsapp;
+  return number;
 }
 
 // Abre una pestaña en el mismo gesto del usuario (para que el navegador no la
@@ -379,6 +470,9 @@ async function contactByWhatsApp(listing: Listing, stay?: StayRequest, onError?:
   try {
     const number = await revealWhatsApp(listing, stay);
     const url = whatsappUrl(number, listing, stay);
+    if (!url) {
+      throw new Error("Este anuncio no tiene un WhatsApp de contacto válido.");
+    }
     if (pendingWindow && !pendingWindow.closed) {
       pendingWindow.location.href = url;
     } else {
@@ -1370,7 +1464,10 @@ export default function Home() {
         return (await response.json()) as { user?: AuthUser | null };
       })
       .then((payload) => {
-        if (!cancelled) setCurrentUser(payload.user ?? null);
+        if (cancelled) return;
+        const account = payload.user ?? null;
+        if (account) mergeAccountOverLocal(account);
+        setCurrentUser(account);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -1840,6 +1937,7 @@ export default function Home() {
   }
 
   function authenticated(user: AuthUser) {
+    mergeAccountOverLocal(user);
     setCurrentUser(user);
     setShowLogin(false);
     setShowGoogleNudge(false);
@@ -2353,7 +2451,7 @@ export default function Home() {
           <div className="modal-header"><div><span className="modal-kicker">Transparencia</span><h2>Privacidad y términos</h2></div><button className="close-button" onClick={() => setShowLegal(false)} aria-label="Cerrar privacidad y términos">×</button></div>
           <div className="info-content">
             <h3>Privacidad y datos personales (Ley N.º 29733)</h3>
-            <p>Tratamos tus datos conforme a la Ley N.º 29733 de Protección de Datos Personales del Perú. Guardamos solo lo necesario para operar el servicio: tu cuenta (nombre y correo), tus anuncios, tus favoritos y el registro de consultas.</p>
+            <p>Tratamos tus datos conforme a la Ley N.º 29733 de Protección de Datos Personales del Perú. Guardamos solo lo necesario para operar el servicio: tu cuenta (nombre y correo), los datos de contacto que usas al publicar (nombre, WhatsApp y zona), tus anuncios, tus favoritos y el registro de consultas.</p>
             <p>Usamos cookies propias y almacenamiento local para mantener tu sesión, recordar tus favoritos y tus preferencias. No vendemos tus datos ni usamos cookies publicitarias de terceros.</p>
             <p>Puedes pedir la actualización o eliminación de tus datos escribiéndonos por <a href={CONTACT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer">WhatsApp ({CONTACT_WHATSAPP_DISPLAY})</a>.</p>
             <h3>Términos de uso</h3>
@@ -2432,7 +2530,14 @@ export default function Home() {
         </Modal>
       )}
 
-      {showPublish && currentUser && <PublishModal category={activeCategory} defaultOwnerName={currentUser.name} onClose={() => setShowPublish(false)} onCreated={(listing) => {
+      {showPublish && currentUser && <PublishModal category={activeCategory} user={currentUser} onClose={() => setShowPublish(false)} onCreated={(listing) => {
+        writePublisherProfile({ ownerName: listing.ownerName, ownerWhatsApp: listing.ownerWhatsApp, location: listing.location });
+        setCurrentUser((current) => current ? {
+          ...current,
+          publisherName: listing.ownerName,
+          publisherWhatsApp: listing.ownerWhatsApp,
+          publisherLocation: listing.location,
+        } : current);
         setShowPublish(false);
         if (listing.status === "pending") {
           // Los anuncios nuevos pasan por revisión: no aparecen en la lista
@@ -2887,9 +2992,10 @@ async function uploadPublishPhotos(files: File[]): Promise<string[]> {
   return urls;
 }
 
-function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { category: Category; defaultOwnerName: string; onClose: () => void; onCreated: (listing: Listing) => void }) {
+function PublishModal({ category, user, onClose, onCreated }: { category: Category; user: AuthUser; onClose: () => void; onCreated: (listing: Listing) => void }) {
   const [activeCategory, setActiveCategory] = useState<Category>(category);
-  const [form, setForm] = useState({ title: "", location: "", price: "", description: "", ownerName: defaultOwnerName, ownerWhatsApp: "" });
+  const defaults = publisherFormDefaults(user);
+  const [form, setForm] = useState({ title: "", location: defaults.location, price: "", description: "", ownerName: defaults.ownerName, ownerWhatsApp: defaults.ownerWhatsApp });
   const [roomieForm, setRoomieForm] = useState({ bathroom: "Compartido", bed: "1 plaza", furnished: "Sí", services: "Sí" });
   const [stayForm, setStayForm] = useState({ guests: "2", bedrooms: "1", beds: "1", bathrooms: "1" });
   const [stayAmenities, setStayAmenities] = useState<StayAmenity[]>([]);
@@ -3010,6 +3116,11 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
       });
       const payload = (await response.json()) as { listing?: Listing; error?: string };
       if (!response.ok || !payload.listing) throw new Error(payload.error ?? "No se pudo guardar la publicación");
+      writePublisherProfile({
+        ownerName: payload.listing.ownerName,
+        ownerWhatsApp: payload.listing.ownerWhatsApp,
+        location: payload.listing.location,
+      });
       onCreated(payload.listing);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Revisa los datos e intenta otra vez.");
@@ -3031,11 +3142,12 @@ function PublishModal({ category, defaultOwnerName, onClose, onCreated }: { cate
       <form onSubmit={submit}>
         <div className="form-grid">
           <label>Título<input required maxLength={120} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder={copy.titlePlaceholder} /></label>
-          <label>Distrito / zona<input required maxLength={160} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Ej. Miraflores, Lima" /></label>
+          <label>Distrito / zona<input required maxLength={160} autoComplete="address-level2" value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Ej. Miraflores, Lima" /></label>
           <label>Precio en soles · {categoryDetails[activeCategory].priceLabel}<input required min="1" max="10000000" type="number" value={form.price} onChange={(event) => setForm({ ...form, price: event.target.value })} placeholder="450" /></label>
-          <label>Tu nombre<input required maxLength={80} value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label>
-          <label>WhatsApp de contacto<input required maxLength={20} inputMode="tel" value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>
+          <label>Tu nombre<input required maxLength={80} autoComplete="name" value={form.ownerName} onChange={(event) => setForm({ ...form, ownerName: event.target.value })} placeholder="Cómo te conocerán" /></label>
+          <label>WhatsApp de contacto<input required maxLength={20} inputMode="tel" autoComplete="tel" value={form.ownerWhatsApp} onChange={(event) => setForm({ ...form, ownerWhatsApp: event.target.value })} placeholder="51999888777" /></label>
         </div>
+        <p className="publish-profile-hint">Usaremos estos datos en tus próximos anuncios</p>
         {activeCategory === "Roomies" && <fieldset className="publish-depa-fields"><legend>Datos de la habitación</legend><div className="form-grid">
           <label>Baño<select value={roomieForm.bathroom} onChange={(event) => setRoomieForm({ ...roomieForm, bathroom: event.target.value })}><option value="Privado">Privado</option><option value="Compartido">Compartido</option></select></label>
           <label>Cama<select value={roomieForm.bed} onChange={(event) => setRoomieForm({ ...roomieForm, bed: event.target.value })}><option value="1 plaza">1 plaza</option><option value="1.5 plazas">1.5 plazas</option><option value="2 plazas">2 plazas</option></select></label>

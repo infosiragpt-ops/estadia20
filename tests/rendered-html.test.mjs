@@ -100,7 +100,8 @@ test("enlaza el Facebook oficial y el contacto por WhatsApp del administrador", 
   assert.match(page, /Facebook de \$\{BRAND\}/);
   // «Contacto» abre el WhatsApp del administrador (celular de Perú), no un
   // aviso pasajero ni un correo.
-  assert.match(page, /https:\/\/wa\.me\/51918714054/);
+  assert.match(page, /SITE_WHATSAPP_E164 = "51918714054"/);
+  assert.match(page, /https:\/\/wa\.me\/\$\{SITE_WHATSAPP_E164\}/);
   assert.match(page, /Hola, les escribo desde llaves365\.com/);
   assert.doesNotMatch(page, /onClick=\{\(\) => flashNotice\(`Soporte: \$\{SUPPORT_EMAIL\}`\)\}>Contacto</);
   // Ambos enlaces abren en pestaña nueva sin filtrar el opener.
@@ -166,7 +167,8 @@ test("ola 1: compartir, legal, HEIC, WhatsApp protegido y ciclo de vida", async 
   assert.match(styles, /\.cookie-notice/);
   assert.doesNotMatch(page, /hola@estadia20\.com/);
   assert.doesNotMatch(page, /SUPPORT_EMAIL/);
-  assert.match(page, /wa\.me\/51918714054/);
+  assert.match(page, /SITE_WHATSAPP_E164 = "51918714054"/);
+  assert.match(page, /https:\/\/wa\.me\/\$\{SITE_WHATSAPP_E164\}/);
 
   // C. Fotos: HEIC/HEIF aceptados y casilla con `capture` para la cámara.
   assert.match(page, /image\/heic/);
@@ -185,9 +187,15 @@ test("ola 1: compartir, legal, HEIC, WhatsApp protegido y ciclo de vida", async 
 
   // E. El número del anunciante viaja enmascarado y se revela al consultar.
   assert.match(page, /revealWhatsApp/);
+  assert.match(page, /function publisherContactUrl/);
   assert.doesNotMatch(page, /wa\.me\/\$\{listing\.ownerWhatsApp\}/);
   assert.match(server, /masked_whatsapp/);
   assert.match(server, /ownerWhatsAppMasked/);
+  assert.match(server, /def reveal_publisher_whatsapp/);
+  assert.match(server, /SITE_CONTACT_WHATSAPP = "51918714054"/);
+  // Contactar un anuncio nunca usa el WhatsApp del sitio como respaldo.
+  assert.doesNotMatch(page, /publisherContactUrl[\s\S]{0,200}CONTACT_WHATSAPP_URL/);
+  assert.doesNotMatch(page, /contactByWhatsApp[\s\S]{0,500}CONTACT_WHATSAPP_URL/);
 
   // F. SEO: sitemap y robots reales, redirecciones 301 y JSON-LD con el
   // Facebook oficial (sin redes inventadas).
@@ -227,6 +235,53 @@ test("ola 1: compartir, legal, HEIC, WhatsApp protegido y ciclo de vida", async 
   // Las pruebas nuevas corren en el despliegue y en npm test.
   assert.match(workflow, /tests\.test_wave1_api/);
   assert.match(packageJson, /tests\.test_wave1_api/);
+});
+
+test("recuerda nombre, WhatsApp y zona al publicar, sin romper la CSP", async () => {
+  const [page, styles, server, nginx, packageJson, workflow] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+    readFile(new URL("vps/server.py", root), "utf8"),
+    readFile(new URL("vps/estadia20.nginx", root), "utf8"),
+    readFile(new URL("package.json", root), "utf8"),
+    readFile(new URL(".github/workflows/deploy-production.yml", root), "utf8"),
+  ]);
+
+  // El formulario rellena identidad/contacto/zona; título, precio y detalles
+  // de categoría siguen en blanco para un anuncio nuevo.
+  assert.match(page, /llaves365-publisher-profile/);
+  assert.match(page, /function publisherFormDefaults/);
+  assert.match(page, /function mergeAccountOverLocal/);
+  assert.match(page, /Usaremos estos datos en tus próximos anuncios/);
+  assert.match(page, /title: "", location: defaults\.location, price: "", description: "", ownerName: defaults\.ownerName, ownerWhatsApp: defaults\.ownerWhatsApp/);
+  assert.match(styles, /\.publish-profile-hint/);
+
+  // El servidor guarda el perfil en la cuenta y lo devuelve en /api/auth/me
+  // (y el alias /api/me) para que el siguiente visit funcione en cualquier dispositivo.
+  assert.match(server, /publisher_name/);
+  assert.match(server, /def persist_publisher_profile/);
+  assert.match(server, /Nunca pisa un valor existente con/);
+  assert.match(server, /parsed\.path in \{"\/api\/auth\/me", "\/api\/me"\}/);
+  assert.match(server, /def update_publisher_profile/);
+  assert.match(packageJson, /tests\.test_publisher_profile/);
+  assert.match(workflow, /tests\.test_publisher_profile/);
+
+  // El respaldo de invitados usa localStorage del bundle (script-src 'self'),
+  // no un script inline ni eval, así no choca con la CSP de producción.
+  assert.doesNotMatch(page, /eval\(/);
+  assert.doesNotMatch(page, /new Function\(/);
+  assert.match(nginx, /script-src 'self' https:\/\/accounts\.google\.com\/gsi\/client/);
+  assert.match(server, /script-src 'self' https:\/\/accounts\.google\.com\/gsi\/client/);
+
+  const html = await readFile(new URL("vps/public/index.html", root), "utf8");
+  const scriptPath = html.match(/assets\/index-[\w-]+\.js/)?.[0];
+  assert.ok(scriptPath, "vps/public/index.html debe referenciar el bundle JS");
+  const bundle = await readFile(new URL(`vps/public/${scriptPath}`, root), "utf8");
+  assert.ok(bundle.includes("llaves365-publisher-profile"));
+  assert.ok(bundle.includes("Usaremos estos datos en tus próximos anuncios"));
+  assert.ok(bundle.includes("Este anuncio no tiene un WhatsApp de contacto válido"));
+  assert.ok(bundle.includes("https://wa.me/51918714054"));
+  assert.doesNotMatch(bundle, /\beval\(/);
 });
 
 test("hardens the VPS marketplace API", async () => {
