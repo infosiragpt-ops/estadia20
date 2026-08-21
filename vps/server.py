@@ -11,6 +11,7 @@ from email import policy as email_policy
 from email.parser import BytesParser
 import hashlib
 import hmac
+import html
 import io
 import json
 import math
@@ -66,6 +67,10 @@ SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 OAUTH_STATE_COOKIE = "estadia20_oauth"
 OAUTH_STATE_TTL_SECONDS = 10 * 60
 OAUTH_CALLBACK_PATH = "/api/auth/google/callback"
+GOOGLE_OAUTH_AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth"
+# Destinos internos del puente HTML (200) que evita fijar cookies en un 302/303
+# de rebote: Safari ITP y Chrome tiran esas cookies y la sesión no sobrevive.
+AUTH_BRIDGE_HOME = frozenset({"/", "/?auth=google-ok", "/?auth=google-error"})
 OAUTH_REDIRECT_HOSTS = frozenset(
     host.strip().lower()
     for host in os.environ.get(
@@ -82,6 +87,39 @@ SITE_BASE_URL = os.environ.get("LLAVES365_BASE_URL", "https://llaves365.com").rs
 RELEASE_VERSION = os.environ.get(
     "ESTADIA20_RELEASE", os.environ.get("LLAVES365_RELEASE", "dev")
 ).strip() or "dev"
+
+
+def session_cookie_header(token: str, *, same_site: str = "Lax") -> str:
+    """Cookie de sesión HttpOnly. SameSite=Lax en el POST mismo origen (GIS);
+    SameSite=None en el retorno form_post de Google, que es cross-site."""
+    if same_site not in {"Lax", "None"}:
+        raise ValueError("SameSite de sesión inválido")
+    return (
+        f"{SESSION_COOKIE}={token}; Path=/; Max-Age={SESSION_TTL_SECONDS}; "
+        f"HttpOnly; SameSite={same_site}; Secure"
+    )
+
+
+def cleared_session_cookie_headers() -> tuple[str, str]:
+    # El retorno OAuth puede haber fijado SameSite=None; el cierre de sesión
+    # del sitio tiene que borrar las dos variantes. Nunca se llama a Google.
+    return (
+        f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
+        f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=None; Secure",
+    )
+
+
+def oauth_state_cookie_header(value: str | None = None) -> str:
+    if value:
+        return (
+            f"{OAUTH_STATE_COOKIE}={value}; Path=/; "
+            f"Max-Age={OAUTH_STATE_TTL_SECONDS}; HttpOnly; SameSite=None; Secure"
+        )
+    return (
+        f"{OAUTH_STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=None; Secure"
+    )
+
+
 PASSWORD_ITERATIONS = 310_000
 # Los tokens de «olvidé mi contraseña» viven 45 minutos y se guardan con hash;
 # el token en claro solo se registra en los logs del servidor (no hay SMTP aún).
@@ -1528,16 +1566,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 "HttpOnly; SameSite=Lax; Secure",
             )
         if session_token:
-            self.send_header(
-                "Set-Cookie",
-                f"{SESSION_COOKIE}={session_token}; Path=/; Max-Age={SESSION_TTL_SECONDS}; "
-                "HttpOnly; SameSite=Lax; Secure",
-            )
+            self.send_header("Set-Cookie", session_cookie_header(session_token))
         if clear_session:
-            self.send_header(
-                "Set-Cookie",
-                f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
-            )
+            for cookie in cleared_session_cookie_headers():
+                self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(body)
 
@@ -2855,26 +2887,55 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", "0")
         if oauth_state_value:
-            # SameSite=None: Google entrega el id_token con un POST de otro
-            # sitio (accounts.google.com) y la cookie debe viajar con él.
-            self.send_header(
-                "Set-Cookie",
-                f"{OAUTH_STATE_COOKIE}={oauth_state_value}; Path=/; "
-                f"Max-Age={OAUTH_STATE_TTL_SECONDS}; HttpOnly; SameSite=None; Secure",
-            )
+            self.send_header("Set-Cookie", oauth_state_cookie_header(oauth_state_value))
         if clear_oauth_state:
-            self.send_header(
-                "Set-Cookie",
-                f"{OAUTH_STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; "
-                "SameSite=None; Secure",
-            )
+            self.send_header("Set-Cookie", oauth_state_cookie_header())
+        if session_token:
+            self.send_header("Set-Cookie", session_cookie_header(session_token))
+        self.end_headers()
+
+    def send_auth_bridge(
+        self,
+        location: str,
+        *,
+        oauth_state_value: str | None = None,
+        clear_oauth_state: bool = False,
+        session_token: str | None = None,
+        session_same_site: str = "Lax",
+    ) -> None:
+        """Página 200 que fija cookies en contexto de primer partido y sigue
+        a Google o a la portada. Un 302/303 de rebote pierde la cookie en
+        Safari/Chrome (ITP / bounce tracking) y Luis vuelve a parecer invitado."""
+        if location.startswith(f"{GOOGLE_OAUTH_AUTHORIZE}?") or location in AUTH_BRIDGE_HOME:
+            safe = location
+        else:
+            safe = "/"
+        escaped = html.escape(safe, quote=True)
+        body = (
+            "<!doctype html><html lang=\"es\"><head>"
+            "<meta charset=\"utf-8\">"
+            f"<meta http-equiv=\"refresh\" content=\"0;url={escaped}\">"
+            "<title>Llaves365</title>"
+            "</head><body>"
+            f"<p><a href=\"{escaped}\">Continuar</a></p>"
+            "</body></html>"
+        ).encode()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Refresh", f"0;url={safe}")
+        self.send_header("Content-Length", str(len(body)))
+        if oauth_state_value:
+            self.send_header("Set-Cookie", oauth_state_cookie_header(oauth_state_value))
+        if clear_oauth_state:
+            self.send_header("Set-Cookie", oauth_state_cookie_header())
         if session_token:
             self.send_header(
                 "Set-Cookie",
-                f"{SESSION_COOKIE}={session_token}; Path=/; Max-Age={SESSION_TTL_SECONDS}; "
-                "HttpOnly; SameSite=Lax; Secure",
+                session_cookie_header(session_token, same_site=session_same_site),
             )
         self.end_headers()
+        self.wfile.write(body)
 
     def oauth_redirect_uri(self) -> str:
         host = (self.headers.get("Host") or "").split(":", 1)[0].strip().lower()
@@ -2885,7 +2946,12 @@ class Roomies20Handler(BaseHTTPRequestHandler):
     def google_oauth_start(self) -> None:
         """Inicia el acceso con Google por redirección completa (OAuth 2.0,
         response_type=id_token). Es el respaldo cuando el iframe de GIS no
-        carga; Google devuelve el id_token con un form POST al callback."""
+        carga; Google devuelve el id_token con un form POST al callback.
+
+        No se envía prompt=select_account/consent/login: eso obliga a
+        reelegir cuenta o a reautenticarse y parece que el sitio «saca» a
+        Luis de Google. Con la sesión de Google del navegador se reutiliza
+        la cuenta ya abierta."""
         if not GOOGLE_CLIENT_ID:
             self.send_redirect("/?auth=google-error", HTTPStatus.FOUND)
             return
@@ -2900,12 +2966,10 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 "scope": "openid email profile",
                 "state": state,
                 "nonce": nonce,
-                "prompt": "select_account",
             }
         )
-        self.send_redirect(
-            f"https://accounts.google.com/o/oauth2/v2/auth?{parameters}",
-            HTTPStatus.FOUND,
+        self.send_auth_bridge(
+            f"{GOOGLE_OAUTH_AUTHORIZE}?{parameters}",
             oauth_state_value=f"{state}.{nonce}",
         )
 
@@ -2952,10 +3016,13 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 ),
                 flush=True,
             )
-            self.send_redirect("/?auth=google-error", clear_oauth_state=True)
+            self.send_auth_bridge("/?auth=google-error", clear_oauth_state=True)
             return
-        self.send_redirect(
-            "/?auth=google-ok", clear_oauth_state=True, session_token=token
+        self.send_auth_bridge(
+            "/?auth=google-ok",
+            clear_oauth_state=True,
+            session_token=token,
+            session_same_site="None",
         )
 
     def logout_user(self) -> None:

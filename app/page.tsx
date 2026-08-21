@@ -292,7 +292,6 @@ type GoogleIdentityClient = {
       locale?: string;
     },
   ) => void;
-  disableAutoSelect: () => void;
 };
 
 declare global {
@@ -1364,7 +1363,7 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/auth/me")
+    fetch("/api/auth/me", { credentials: "include" })
       .then(async (response) => {
         if (!response.ok) throw new Error("No se pudo verificar la sesión");
         return (await response.json()) as { user?: AuthUser | null };
@@ -1393,15 +1392,42 @@ export default function Home() {
 
   useEffect(() => {
     if (!oauthRedirectResult) return;
-    const timer = window.setTimeout(() => {
-      if (oauthRedirectResult === "google-ok") flashNotice("Sesión iniciada con Google");
-      if (oauthRedirectResult === "google-error") {
-        setShowLogin(true);
-        flashNotice("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error");
-      }
+    let cancelled = false;
+    const finish = (message: string, tone: "success" | "error" = "success", openLogin = false) => {
+      if (cancelled) return;
+      if (openLogin) setShowLogin(true);
+      flashNotice(message, tone);
       setOauthRedirectResult(null);
-    }, 0);
-    return () => window.clearTimeout(timer);
+    };
+    if (oauthRedirectResult === "google-ok") {
+      fetch("/api/auth/me", { credentials: "include" })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("No se pudo verificar la sesión");
+          return (await response.json()) as { user?: AuthUser | null };
+        })
+        .then((payload) => {
+          if (payload.user) {
+            setCurrentUser(payload.user);
+            finish("Sesión iniciada con Google");
+            return;
+          }
+          finish("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error", true);
+        })
+        .catch(() => {
+          finish("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error", true);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (oauthRedirectResult === "google-error") {
+      finish("No pudimos completar el acceso con Google. Inténtalo nuevamente.", "error", true);
+    } else {
+      setOauthRedirectResult(null);
+    }
+    return () => {
+      cancelled = true;
+    };
   }, [oauthRedirectResult]);
 
   useEffect(() => {
@@ -2589,7 +2615,7 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
 
     async function configureGoogle() {
       try {
-        const response = await fetch("/api/auth/config");
+        const response = await fetch("/api/auth/config", { credentials: "include" });
         const config = (await response.json()) as { googleEnabled?: boolean; googleClientId?: string };
         if (!response.ok || !config.googleEnabled || !config.googleClientId) {
           if (!cancelled) setGoogleFlowEnabled(false);
@@ -2604,6 +2630,7 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
           try {
             const authResponse = await fetch("/api/auth/google", {
               method: "POST",
+              credentials: "include",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ credential }),
             });
@@ -2617,6 +2644,9 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
           }
         };
         googleButtonRef.current.replaceChildren();
+        // Solo el botón GIS: no se llama prompt(), ni revoke, ni se cierra
+        // la sesión de Google del navegador. La sesión de Llaves365 vive en
+        // la cookie HttpOnly; cerrar sesión del sitio no toca Google.
         window.google.accounts.id.initialize({
           client_id: config.googleClientId,
           callback: (credentialResponse) => {
@@ -2679,6 +2709,7 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
     try {
       const response = await fetch(`/api/auth/${mode === "login" ? "login" : "register"}`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
@@ -2696,9 +2727,11 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
     setIsSaving(true);
     setError("");
     try {
-      const response = await fetch(allDevices ? "/api/auth/logout-all" : "/api/auth/logout", { method: "POST" });
+      const response = await fetch(allDevices ? "/api/auth/logout-all" : "/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
       if (!response.ok) throw new Error("No se pudo cerrar la sesión");
-      window.google?.accounts.id.disableAutoSelect();
       if (allDevices) notify?.("Cerramos tu sesión en todos los equipos.");
       onLoggedOut();
     } catch (logoutError) {

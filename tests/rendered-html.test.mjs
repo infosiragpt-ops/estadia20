@@ -278,3 +278,34 @@ test("hardens the VPS marketplace API", async () => {
   assert.match(nginx, /img-src 'self' data: blob:/);
   assert.match(workflow, /tests\.test_marketplace_api/);
 });
+
+test("el acceso con Google conserva la sesión del sitio y no cierra Google", async () => {
+  const [page, server, html] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("vps/server.py", root), "utf8"),
+    readFile(new URL("vps/public/index.html", root), "utf8"),
+  ]);
+
+  // Cerrar sesión de Llaves365 solo borra la cookie del sitio. disableAutoSelect
+  // + FedCM y revoke sacan a Luis de su cuenta de Google en el navegador.
+  assert.doesNotMatch(page, /disableAutoSelect/);
+  assert.doesNotMatch(page, /accounts\.id\.revoke/);
+  assert.doesNotMatch(page, /google\.accounts\.id\.prompt\s*\(/);
+  assert.doesNotMatch(page, /accounts\.google\.com\/Logout/);
+  assert.match(page, /fetch\("\/api\/auth\/me", \{ credentials: "include" \}/);
+  assert.match(page, /credentials: "include"/);
+  assert.match(page, /\/api\/auth\/logout/);
+
+  assert.doesNotMatch(server, /["']prompt["']:\s*["'](select_account|consent|login)["']/);
+  assert.doesNotMatch(server, /oauth2\/revoke/);
+  assert.doesNotMatch(server, /accounts\.google\.com\/Logout/);
+  assert.match(server, /def send_auth_bridge/);
+  assert.match(server, /def cleared_session_cookie_headers/);
+  assert.match(server, /SameSite=None/);
+
+  const scriptPath = html.match(/assets\/index-[\w-]+\.js/)?.[0];
+  assert.ok(scriptPath, "vps/public/index.html debe referenciar el bundle JS");
+  const bundle = await readFile(new URL(`vps/public/${scriptPath}`, root), "utf8");
+  assert.equal(bundle.includes("disableAutoSelect"), false);
+  assert.equal(bundle.includes("accounts.id.revoke"), false);
+});
