@@ -82,6 +82,10 @@ OAUTH_REDIRECT_HOSTS = frozenset(
 OAUTH_DEFAULT_HOST = "llaves365.com"
 # URL pública canónica del sitio: alimenta el sitemap y robots.txt.
 SITE_BASE_URL = os.environ.get("LLAVES365_BASE_URL", "https://llaves365.com").rstrip("/")
+# WhatsApp del software/administrador (pie y «Contacto» del sitio). Nunca se
+# usa como respaldo al contactar un anuncio: ese chat va al número que el
+# anunciante registró al publicar.
+SITE_CONTACT_WHATSAPP = "51918714054"
 # Cadena de versión para /api/health; el despliegue puede inyectarla con
 # ESTADIA20_RELEASE (por ejemplo, el SHA del commit).
 RELEASE_VERSION = os.environ.get(
@@ -206,6 +210,7 @@ RATE_LIMIT_RULES = {
     ("POST", "/api/auth/password/forgot"): (5, 900),
     ("POST", "/api/auth/password/reset"): (10, 900),
     ("PATCH", "/api/listings"): (30, 3600),
+    ("PATCH", "/api/auth/me"): (30, 3600),
     ("DELETE", "/api/listings"): (30, 3600),
     # Límite de lectura moderado para frenar el raspado masivo de anuncios sin
     # afectar la navegación normal (la lista pagina de a 24 y cachea con ETag).
@@ -524,6 +529,18 @@ def initialize_database() -> None:
             "last_login_provider": (
                 "ALTER TABLE users ADD COLUMN last_login_provider TEXT"
             ),
+            # Perfil de publicación: nombre, WhatsApp y última zona. Se
+            # rellenan al publicar (o al guardar la cuenta) para no pedirlos
+            # otra vez; nunca se pisan con cadenas vacías.
+            "publisher_name": (
+                "ALTER TABLE users ADD COLUMN publisher_name TEXT NOT NULL DEFAULT ''"
+            ),
+            "publisher_whatsapp": (
+                "ALTER TABLE users ADD COLUMN publisher_whatsapp TEXT NOT NULL DEFAULT ''"
+            ),
+            "publisher_location": (
+                "ALTER TABLE users ADD COLUMN publisher_location TEXT NOT NULL DEFAULT ''"
+            ),
         }
         for column, migration in user_migrations.items():
             if column not in user_columns:
@@ -748,6 +765,20 @@ def record_login(
     )
 
 
+USER_PUBLIC_COLUMNS = (
+    "id, name, email, avatar_url, auth_provider, role, "
+    "publisher_name, publisher_whatsapp, publisher_location"
+)
+
+
+def _row_text(row: sqlite3.Row, key: str) -> str:
+    try:
+        value = row[key]
+    except (IndexError, KeyError):
+        return ""
+    return "" if value is None else str(value)
+
+
 def user_dict(row: sqlite3.Row) -> dict[str, object]:
     return {
         "id": row["id"],
@@ -756,6 +787,9 @@ def user_dict(row: sqlite3.Row) -> dict[str, object]:
         "avatarUrl": row["avatar_url"],
         "authProvider": row["auth_provider"],
         "role": row["role"],
+        "publisherName": _row_text(row, "publisher_name"),
+        "publisherWhatsApp": _row_text(row, "publisher_whatsapp"),
+        "publisherLocation": _row_text(row, "publisher_location"),
     }
 
 
@@ -855,6 +889,56 @@ def normalize_peru_whatsapp(value: object) -> str | None:
     if len(digits) == 11 and digits.startswith("519"):
         return digits
     return None
+
+
+def reveal_publisher_whatsapp(listing: sqlite3.Row) -> str | None:
+    """Número E.164 del anunciante para «Contactar». Primero el del anuncio,
+    luego el perfil guardado. Si ninguno es un celular peruano válido, no se
+    inventa ni se sustituye por el WhatsApp del sitio."""
+    for key in ("owner_whatsapp", "publisher_whatsapp"):
+        try:
+            value = listing[key]
+        except (IndexError, KeyError):
+            continue
+        normalized = normalize_peru_whatsapp(value)
+        if normalized:
+            return normalized
+    return None
+
+
+def persist_publisher_profile(
+    database: sqlite3.Connection,
+    user_id: int,
+    *,
+    name: str = "",
+    whatsapp: str = "",
+    location: str = "",
+) -> None:
+    """Guarda el perfil de publicación. Nunca pisa un valor existente con
+    una cadena vacía: si el cliente omite un campo, se conserva lo anterior."""
+    assignments: list[str] = []
+    values: list[object] = []
+    clean_name = str(name or "").strip()
+    if 1 <= len(clean_name) <= 80:
+        assignments.append("publisher_name = ?")
+        values.append(clean_name)
+    normalized_whatsapp = (
+        normalize_peru_whatsapp(whatsapp) if str(whatsapp or "").strip() else None
+    )
+    if normalized_whatsapp:
+        assignments.append("publisher_whatsapp = ?")
+        values.append(normalized_whatsapp)
+    clean_location = str(location or "").strip()
+    if 1 <= len(clean_location) <= 160:
+        assignments.append("publisher_location = ?")
+        values.append(clean_location)
+    if not assignments:
+        return
+    values.append(user_id)
+    database.execute(
+        f"UPDATE users SET {', '.join(assignments)} WHERE id = ?",
+        values,
+    )
 
 
 def listing_dict(row: sqlite3.Row, include_contact: bool = False) -> dict[str, object]:
@@ -1653,7 +1737,9 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             row = database.execute(
                 """
                 SELECT users.id, users.name, users.email, users.avatar_url,
-                       users.auth_provider, users.role
+                       users.auth_provider, users.role,
+                       users.publisher_name, users.publisher_whatsapp,
+                       users.publisher_location
                 FROM sessions
                 JOIN users ON users.id = sessions.user_id
                 WHERE sessions.token_hash = ? AND sessions.expires_at > ?
@@ -1768,7 +1854,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/inquiries":
             self.list_inquiries(parse_qs(parsed.query, keep_blank_values=True))
             return
-        if parsed.path == "/api/auth/me":
+        if parsed.path in {"/api/auth/me", "/api/me"}:
             user = self.authenticated_user()
             self.send_json({"user": user_dict(user) if user is not None else None})
             return
@@ -2495,6 +2581,29 @@ class Roomies20Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path in {"/api/auth/me", "/api/me"}:
+            if not self.check_rate_limit("PATCH", "/api/auth/me"):
+                return
+            try:
+                self.update_publisher_profile()
+            except (ValueError, json.JSONDecodeError):
+                self.send_api_error(
+                    "La solicitud no es válida.", HTTPStatus.BAD_REQUEST, "invalid_request"
+                )
+            except Exception as error:  # keep API failures private but logged
+                print(
+                    json.dumps(
+                        {"requestId": self.request_id, "error": repr(error)},
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+                self.send_api_error(
+                    "No se pudo completar la operación.",
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                )
+            return
         listing_match = re.fullmatch(r"/api/listings/(\d{1,10})", path)
         if not listing_match:
             self.send_api_error("Ruta no encontrada.", HTTPStatus.NOT_FOUND, "not_found")
@@ -2661,10 +2770,63 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 f"UPDATE listings SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 [*updates.values(), listing_id],
             )
+            persist_publisher_profile(
+                database,
+                int(user["id"]),
+                name=str(updates.get("owner_name") or ""),
+                whatsapp=str(updates.get("owner_whatsapp") or ""),
+                location=str(updates.get("location") or ""),
+            )
             updated = database.execute(
                 "SELECT * FROM listings WHERE id = ?", (listing_id,)
             ).fetchone()
         self.send_json({"listing": listing_dict(updated, include_contact=True)})
+
+    def update_publisher_profile(self) -> None:
+        user = self.require_user()
+        if user is None:
+            return
+        payload = self.read_json()
+        name = str(
+            payload.get("publisherName") or payload.get("ownerName") or ""
+        ).strip()
+        whatsapp_raw = payload.get("publisherWhatsApp")
+        if whatsapp_raw is None:
+            whatsapp_raw = payload.get("ownerWhatsApp")
+        location = str(
+            payload.get("publisherLocation") or payload.get("location") or ""
+        ).strip()
+        if name and not 1 <= len(name) <= 80:
+            self.send_json({"error": "El nombre no es válido."}, HTTPStatus.BAD_REQUEST)
+            return
+        if location and len(location) > 160:
+            self.send_json({"error": "La ubicación no es válida."}, HTTPStatus.BAD_REQUEST)
+            return
+        if whatsapp_raw is not None and str(whatsapp_raw).strip():
+            if normalize_peru_whatsapp(whatsapp_raw) is None:
+                self.send_json(
+                    {
+                        "error": (
+                            "Ingresa un WhatsApp peruano válido: un celular "
+                            "de 9 dígitos que empiece con 9."
+                        )
+                    },
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+        with connect() as database:
+            persist_publisher_profile(
+                database,
+                int(user["id"]),
+                name=name,
+                whatsapp=str(whatsapp_raw or ""),
+                location=location,
+            )
+            updated = database.execute(
+                f"SELECT {USER_PUBLIC_COLUMNS} FROM users WHERE id = ?",
+                (user["id"],),
+            ).fetchone()
+        self.send_json({"user": user_dict(updated)})
 
     def register_user(self) -> None:
         payload = self.read_json()
@@ -2701,7 +2863,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 user_id = int(cursor.lastrowid)
                 user = database.execute(
                     """
-                    SELECT id, name, email, avatar_url, auth_provider, role
+                    SELECT id, name, email, avatar_url, auth_provider, role,
+                           publisher_name, publisher_whatsapp, publisher_location
                     FROM users WHERE id = ?
                     """,
                     (user_id,),
@@ -2731,7 +2894,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             user = database.execute(
                 """
                 SELECT id, name, email, password_hash, avatar_url,
-                       auth_provider, role
+                       auth_provider, role, publisher_name, publisher_whatsapp,
+                       publisher_location
                 FROM users WHERE email = ?
                 """,
                 (email,),
@@ -2860,7 +3024,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     )
                 user = database.execute(
                     """
-                    SELECT id, name, email, avatar_url, auth_provider, role
+                    SELECT id, name, email, avatar_url, auth_provider, role,
+                           publisher_name, publisher_whatsapp, publisher_location
                     FROM users WHERE id = ?
                     """,
                     (user_id,),
@@ -3302,6 +3467,13 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                     """,
                     [listing_id, user["id"], *uploaded_paths],
                 )
+            persist_publisher_profile(
+                database,
+                int(user["id"]),
+                name=owner_name,
+                whatsapp=owner_whatsapp,
+                location=location,
+            )
             row = database.execute(
                 "SELECT * FROM listings WHERE id = ?", (listing_id,)
             ).fetchone()
@@ -3373,7 +3545,14 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         user = self.authenticated_user()
         with connect() as database:
             listing = database.execute(
-                "SELECT id, user_id, status, owner_whatsapp FROM listings WHERE id = ?",
+                """
+                SELECT listings.id, listings.user_id, listings.status,
+                       listings.owner_whatsapp, listings.owner_name,
+                       listings.title, users.publisher_whatsapp
+                FROM listings
+                LEFT JOIN users ON users.id = listings.user_id
+                WHERE listings.id = ?
+                """,
                 (listing_id,),
             ).fetchone()
             if listing is None:
@@ -3410,10 +3589,16 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         can_reveal = not is_demo and (
             listing["status"] == "published" or is_privileged
         )
+        publisher_number = reveal_publisher_whatsapp(listing) if can_reveal else None
         self.send_json(
             {
                 "recorded": True,
-                "whatsapp": listing["owner_whatsapp"] if can_reveal else None,
+                "whatsapp": publisher_number,
+                "whatsappUrl": (
+                    f"https://wa.me/{publisher_number}"
+                    if publisher_number
+                    else None
+                ),
             },
             HTTPStatus.CREATED,
             visitor_id=visitor_id if is_new else None,
