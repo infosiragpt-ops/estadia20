@@ -53,28 +53,31 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .service-tab > span:last-child { display: grid; }
 .service-tab strong { font-size: clamp(20px, 2vw, 39px); line-height: 1; letter-spacing: -.04em; }
 .service-tab small { display: none; }
-.header-actions { justify-self: end; display: flex; align-items: center; gap: 8px; }
-/* CTA de anfitrión: píldora rosa con relieve suave que resalta sobre el
-   amarillo (#ffbd00) de la cabecera sin verse estridente. */
-.host-link { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 44px; padding: 11px 20px; border: 0; border-radius: 999px; background: linear-gradient(135deg, var(--rose-dark), var(--rose)); color: #fff; font-size: clamp(14px, 1vw, 20px); font-weight: 800; letter-spacing: -.01em; white-space: nowrap; box-shadow: 0 8px 18px rgba(150,5,60,.28), 0 2px 4px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.26); transition: transform .16s ease, box-shadow .16s ease, filter .16s ease; }
-.host-link:hover { filter: brightness(1.06); transform: translateY(-1px); box-shadow: 0 11px 24px rgba(150,5,60,.32), 0 3px 6px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.3); }
-.host-link:active { filter: brightness(.97); transform: translateY(0) scale(.97); box-shadow: 0 4px 10px rgba(150,5,60,.26), inset 0 1px 0 rgba(255,255,255,.2); }
+.header-actions { justify-self: end; display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Acceso y cuenta: chip compacto alineado con la hamburguesa, no una
+   píldora gigante. El rosa se mantiene para contrastar el amarillo. */
+.host-link { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; min-height: 40px; max-width: 100%; padding: 4px 14px 4px 10px; border: 0; border-radius: 999px; background: linear-gradient(135deg, var(--rose-dark), var(--rose)); color: #fff; font-size: 13.5px; font-weight: 700; letter-spacing: -.01em; line-height: 1; white-space: nowrap; box-shadow: 0 4px 10px rgba(150,5,60,.22), 0 1px 2px rgba(0,0,0,.12), inset 0 1px 0 rgba(255,255,255,.24); transition: transform .16s ease, box-shadow .16s ease, filter .16s ease; }
+.host-link:hover { filter: brightness(1.06); transform: translateY(-1px); box-shadow: 0 7px 16px rgba(150,5,60,.26), 0 2px 4px rgba(0,0,0,.12), inset 0 1px 0 rgba(255,255,255,.3); }
+.host-link:active { filter: brightness(.97); transform: translateY(0) scale(.98); box-shadow: 0 3px 8px rgba(150,5,60,.22), inset 0 1px 0 rgba(255,255,255,.2); }
 .host-link:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
 /* Acceso con Google en la cabecera: la G oficial va sobre una ficha blanca
    redonda para que sus colores no se pierdan sobre la píldora rosa. */
-.login-google-badge { display: grid; flex: none; place-items: center; width: 24px; height: 24px; padding: 4px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.22); }
+.login-google-badge { display: grid; flex: none; place-items: center; width: 20px; height: 20px; padding: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
 .login-google-badge svg { width: 100%; height: 100%; }
-/* Con sesión activa la píldora muestra la cuenta (avatar o inicial + nombre). */
-.account-link { padding-left: 12px; }
-.account-avatar { width: 26px; height: 26px; flex: none; border-radius: 50%; object-fit: cover; box-shadow: 0 0 0 2px rgba(255,255,255,.55); }
-.account-initial { display: grid; flex: none; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgba(255,255,255,.26); font-size: 13px; }
-.account-name { max-width: 13ch; overflow: hidden; text-overflow: ellipsis; }
+.login-label { overflow: hidden; text-overflow: ellipsis; }
+/* Con sesión activa el chip muestra foto (~30px) + primer nombre. Se
+   acota aquí para que el avatar grande del modal no lo agrande. */
+.account-link { padding: 4px 12px 4px 5px; }
+.account-link .account-avatar, .account-link .account-initial { width: 30px; height: 30px; flex: none; border-radius: 50%; }
+.account-link .account-avatar { object-fit: cover; box-shadow: 0 0 0 1.5px rgba(255,255,255,.55); }
+.account-link .account-initial { display: grid; place-items: center; background: rgba(255,255,255,.26); font-size: 12px; font-weight: 700; }
+.account-name { max-width: 11ch; overflow: hidden; text-overflow: ellipsis; }
 .globe-button:hover, .menu-trigger:hover { background: rgba(255,255,255,.22); }
-.globe-button { width: clamp(38px, 3vw, 54px); height: clamp(38px, 3vw, 54px); display: grid; place-items: center; padding: 8px; border: 0; border-radius: 50%; background: transparent; color: #050505; }
+.globe-button { width: 40px; height: 40px; display: grid; place-items: center; padding: 8px; border: 0; border-radius: 50%; background: transparent; color: #050505; }
 .globe-button svg { width: 100%; height: 100%; }
-.menu-trigger { width: clamp(48px, 3.7vw, 67px); height: clamp(42px, 3.3vw, 59px); display: grid; place-items: center; padding: 9px; border: 0; border-radius: 13px; background: transparent; }
-.hamburger { width: 100%; display: grid; gap: clamp(6px, .55vw, 9px); }
-.hamburger i { display: block; height: 3px; border-radius: 3px; background: #050505; }
+.menu-trigger { width: 40px; height: 40px; display: grid; place-items: center; padding: 10px; border: 0; border-radius: 10px; background: transparent; }
+.hamburger { width: 100%; display: grid; gap: 5px; }
+.hamburger i { display: block; height: 2px; border-radius: 2px; background: #050505; }
 .search-row { display: flex; justify-content: center; width: 100%; margin-top: 14px; }
 .compact-search { width: min(1344px, 69vw); min-width: 760px; height: 106px; display: grid; grid-template-columns: minmax(330px, 1.65fr) minmax(180px, .7fr) minmax(165px, .62fr) 84px; align-items: center; padding: 7px 9px 7px 16px; border: 5px solid rgba(245,245,245,.95); border-radius: 56px; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,.17); }
 .compact-search.roomies-search { width: min(1120px, 76vw); grid-template-columns: minmax(0, 1fr) 84px; }
@@ -380,31 +383,51 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .plan-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; background: #fff0f3; color: var(--rose); font-size: 19px; }
 .plans-list button > span:nth-child(2) { display: grid; gap: 3px; }.plans-list strong { font-size: 12px; }.plans-list small { color: var(--muted); font-size: 10px; }.plans-list b { font-size: 16px; }
 .benefits { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }.benefits span, .detail-benefits span { padding: 7px 9px; border-radius: 16px; background: #edf8f1; color: #286a4c; font-size: 9px; }
-.login-modal { max-width: 410px; display: grid; justify-items: center; text-align: center; }.login-close { position: absolute; top: 18px; right: 18px; }.login-logo { width: 55px; height: 55px; display: grid; place-items: center; margin: 5px 0 18px; border-radius: 16px; background: #fff0f3; color: var(--rose); font-size: 27px; }.login-modal p { max-width: 310px; margin: 14px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }.login-modal > small { margin-top: 11px; color: #999; font-size: 9px; }
-.auth-switch { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 19px; padding: 4px; border-radius: 11px; background: var(--soft); }.auth-switch button { min-height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; }.auth-switch button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 5px rgba(0,0,0,.1); }.auth-form { width: 100%; display: grid; gap: 12px; margin-top: 16px; text-align: left; }.auth-form label { display: grid; gap: 6px; color: var(--ink); font-size: 10px; font-weight: 700; }.auth-form input { width: 100%; min-height: 43px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; outline: 0; background: #fff; color: var(--ink); font-size: 12px; }.auth-form input:focus { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }.auth-form .primary-button { margin-top: 2px; }.account-summary { width: 100%; display: grid; justify-items: center; }.account-summary > span { margin-top: 13px; padding: 8px 11px; border-radius: 8px; background: var(--soft); color: var(--muted); font-size: 10px; }.account-button { width: 100%; }.account-logout { margin-top: 10px; }.account-logout:disabled { cursor: wait; opacity: .6; }
-.account-avatar { width: 58px; height: 58px; display: block; margin: 5px 0 18px; border: 3px solid #fff; border-radius: 50%; object-fit: cover; box-shadow: 0 0 0 1px var(--line), 0 8px 22px rgba(0,0,0,.13); }
+.login-modal { max-width: 400px; padding: 28px 24px 24px; display: grid; justify-items: center; text-align: center; }
+.login-close { position: absolute; top: 16px; right: 16px; }
+.login-logo { width: 48px; height: 48px; display: grid; place-items: center; margin: 4px 0 14px; border-radius: 14px; background: #fff0f3; color: var(--rose); font-size: 22px; }
+.login-modal h2 { margin-top: 6px; font-size: 22px; line-height: 1.15; letter-spacing: -.03em; }
+.login-modal p { max-width: 340px; margin: 10px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.login-modal > small { margin-top: 12px; color: #888; font-size: 11px; line-height: 1.4; }
+.auth-switch { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 16px; padding: 4px; border-radius: 10px; background: var(--soft); }
+.auth-switch button { min-height: 40px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 700; }
+.auth-switch button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 5px rgba(0,0,0,.1); }
+.auth-form { width: 100%; display: grid; gap: 12px; margin-top: 16px; text-align: left; }
+.auth-form label { display: grid; gap: 6px; color: var(--ink); font-size: 13px; font-weight: 700; }
+.auth-form input { width: 100%; min-height: 44px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; outline: 0; background: #fff; color: var(--ink); font-size: 15px; }
+.auth-form input:focus { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.auth-form .primary-button { margin-top: 2px; }
+.login-modal .primary-button { font-size: 14px; }
+.account-summary { width: 100%; display: grid; justify-items: center; }
+.account-summary > span { margin-top: 13px; padding: 8px 11px; border-radius: 8px; background: var(--soft); color: var(--muted); font-size: 12px; }
+.account-button { width: 100%; }
+.account-logout { margin-top: 10px; }
+.account-logout:disabled { cursor: wait; opacity: .6; }
+/* Avatar de la ficha de cuenta (modal), no el chip de la cabecera. */
+.login-modal > .account-avatar { width: 64px; height: 64px; display: block; margin: 4px 0 14px; border: 3px solid #fff; border-radius: 50%; object-fit: cover; box-shadow: 0 0 0 1px var(--line), 0 8px 22px rgba(0,0,0,.13); }
 .account-summary > span { display: flex; align-items: center; gap: 8px; }
-.account-summary > span b { padding: 4px 6px; border-radius: 6px; background: #e7f5ec; color: #167348; font-size: 8px; letter-spacing: .04em; text-transform: uppercase; }
-.google-auth-panel { width: 100%; margin-top: 22px; }
+.account-summary > span b { padding: 4px 6px; border-radius: 6px; background: #e7f5ec; color: #167348; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.google-auth-panel { width: 100%; margin-top: 18px; }
 .google-auth-panel.busy { pointer-events: none; opacity: .62; }
-.google-cta { width: 100%; height: 48px; position: relative; }
-.google-cta-button { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px 14px; border: 1px solid #dadce0; border-radius: 10px; background: #fff; color: #3c4043; font-size: 13px; font-weight: 700; box-shadow: 0 1px 3px rgba(60,64,67,.12); }
-.google-cta-button:hover:not(:disabled) { border-color: #c6dafc; background: #f8faff; }
+/* Alto «large» de Google Identity Services (40px): el fallback no se estira. */
+.google-cta { width: 100%; height: 40px; position: relative; }
+.google-cta-button { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 0 12px; border: 1px solid #dadce0; border-radius: 4px; background: #fff; color: #3c4043; font-size: 14px; font-weight: 500; letter-spacing: .015em; box-shadow: 0 1px 2px rgba(60,64,67,.15); }
+.google-cta-button:hover:not(:disabled) { border-color: #d2e3fc; background: #f8faff; box-shadow: 0 1px 3px 1px rgba(66,133,244,.15); }
 .google-cta-button:disabled { cursor: wait; opacity: .6; }
-.google-cta-button svg { width: 19px; height: 19px; flex: none; }
+.google-cta-button svg { width: 18px; height: 18px; flex: none; }
 /* El botón oficial de Google se renderiza encima del botón propio, casi
    transparente pero interactivo: el toque llega al iframe real de Google.
    Si el iframe no carga, el toque pasa al botón propio (redirección OAuth). */
 .google-button-target { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: .001; pointer-events: none; }
 .google-button-target * { pointer-events: auto; }
 .google-unavailable { width: 100%; min-height: 44px; display: grid; place-items: center; margin-top: 10px; padding: 9px 14px; border: 1px dashed var(--line); border-radius: 9px; background: #fff; color: var(--muted); font-size: 11px; font-weight: 600; line-height: 1.35; }
-.google-auth-panel > small { display: block; max-width: 320px; margin: 10px auto 0; color: #888; font-size: 9px; line-height: 1.45; }
+.google-auth-panel > small { display: block; max-width: 320px; margin: 10px auto 0; color: #888; font-size: 11px; line-height: 1.45; }
 .auth-error { width: 100%; padding: 10px 12px; border-radius: 9px; background: #fff1f3; text-align: left; }
-.auth-divider { width: 100%; display: flex; align-items: center; gap: 10px; margin: 18px 0 12px; color: #999; font-size: 9px; }
+.auth-divider { width: 100%; display: flex; align-items: center; gap: 10px; margin: 16px 0 12px; color: #888; font-size: 12px; }
 .auth-divider::before, .auth-divider::after { height: 1px; flex: 1; content: ""; background: var(--soft-line); }
-.email-access-toggle { width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 8px 12px; border: 0; border-radius: 9px; background: var(--soft); color: #555; font-size: 10px; font-weight: 700; }
+.email-access-toggle { width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 8px 12px; border: 0; border-radius: 9px; background: var(--soft); color: #555; font-size: 13px; font-weight: 700; }
 .email-access-toggle:hover { background: #ededed; color: var(--ink); }
-.google-retry { width: 100%; min-height: 44px; margin-top: 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font-size: 11px; font-weight: 700; }
+.google-retry { width: 100%; min-height: 44px; margin-top: 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink); font-size: 13px; font-weight: 700; }
 .google-retry:hover { border-color: var(--ink); background: #fafafa; }
 .password-access { width: 100%; }
 .password-access .auth-switch { margin-top: 14px; }
@@ -514,7 +537,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .footer-inline-link:hover { color: var(--ink); }
 
 /* --- Recuperar contraseña y sesiones --- */
-.forgot-password-link { justify-self: start; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.forgot-password-link { justify-self: start; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font-size: 13px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 .forgot-password-link:hover { color: var(--ink); }
 .forgot-password { display: grid; gap: 10px; }
 .forgot-hint { margin: 0; color: #555; font-size: 11px; line-height: 1.5; }
@@ -603,14 +626,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .services-top { min-height: 0; grid-template-rows: 44px auto; gap: 6px 8px; }
   .brand { gap: 6px; font-size: 19px; }
   .brand-symbol { width: 32px; height: 32px; }
-  /* En el teléfono el acceso (o la cuenta) es la acción principal junto a la
-     hamburguesa: píldora rosa bien visible con zona táctil de 44px. */
-  .host-link { gap: 7px; min-height: 44px; padding: 8px 14px; font-size: 13px; }
-  .login-google-badge { width: 22px; height: 22px; padding: 4px; }
-  .account-avatar, .account-initial { width: 24px; height: 24px; }
-  .account-name { max-width: 9ch; }
+  /* En el teléfono el chip y la hamburguesa miden 44px y caben en la
+     fila de 44px de la cabecera, sin recortar el nombre. */
+  .header-actions { height: 44px; gap: 6px; }
+  .host-link { height: 44px; min-height: 44px; min-width: 44px; gap: 6px; padding: 4px 12px 4px 8px; font-size: 13px; }
+  .login-google-badge { width: 20px; height: 20px; padding: 3px; }
+  .account-link { padding: 4px 10px 4px 5px; }
+  .account-link .account-avatar, .account-link .account-initial { width: 28px; height: 28px; }
+  .account-name { max-width: 8ch; }
   .globe-button { display: none; }
-  .menu-trigger { width: 44px; height: 44px; padding: 8px; }
+  .menu-trigger { width: 44px; height: 44px; padding: 11px; }
   .hamburger { gap: 5px; }
   .hamburger i { height: 2px; }
 
@@ -774,10 +799,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .modal { width: 100%; max-height: calc(100dvh - 20px); padding: 20px 16px calc(24px + env(safe-area-inset-bottom)); border-radius: 20px 20px 0 0; }
   .modal h2 { font-size: 23px; }
   .close-button { width: 44px; height: 44px; font-size: 25px; }
-  .login-modal { max-width: none; }
+  .login-modal { max-width: none; padding: 22px 18px calc(22px + env(safe-area-inset-bottom)); }
+  .login-modal h2 { font-size: 22px; }
+  .login-modal p { font-size: 14px; }
   .login-close { top: 12px; right: 12px; }
-  .auth-switch button { min-height: 44px; font-size: 12px; }
-  .email-access-toggle { min-height: 44px; font-size: 12px; }
+  .google-cta { height: 44px; }
+  .google-cta-button { font-size: 14px; }
+  .auth-switch button { min-height: 44px; font-size: 13px; }
+  .email-access-toggle { min-height: 44px; font-size: 13px; }
+  .login-modal .primary-button { min-height: 44px; font-size: 14px; }
   .text-action { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
   .modal-options button { min-height: 44px; font-size: 12px; }
   .publish-feature-options button { min-height: 44px; font-size: 11px; }
@@ -823,11 +853,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (max-width: 360px) {
   .brand { font-size: 17px; }
   .brand-symbol { width: 28px; height: 28px; }
-  .host-link { padding: 8px 10px; font-size: 12px; }
+  .host-link { padding: 4px 10px 4px 8px; font-size: 13px; }
+  .account-name { display: none; }
+  .account-link { width: 44px; min-width: 44px; padding: 0; }
   .service-nav { gap: 4px; }
   .service-tab strong { font-size: 11px; }
   .compact-search { grid-template-columns: minmax(0, 1.5fr) minmax(88px, .7fr) 46px; }
   .airbnb-search .airbnb-date-field, .airbnb-search .airbnb-guest-field { padding: 2px 6px; }
+}
+
+@media (max-width: 340px) {
+  .login-label { display: none; }
+  .login-link { width: 44px; min-width: 44px; padding: 0; }
 }
 
 @keyframes sheet-up { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }

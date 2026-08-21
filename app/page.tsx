@@ -2057,9 +2057,9 @@ export default function Home() {
                 <span className="account-name">{currentUser.name.trim().split(/\s+/)[0] || "Mi cuenta"}</span>
               </button>
             ) : (
-              <button className="host-link login-link" onClick={openLogin}>
+              <button className="host-link login-link" onClick={openLogin} aria-label="Iniciar sesión">
                 <span className="login-google-badge" aria-hidden="true"><GoogleGIcon /></span>
-                <span>Iniciar sesión</span>
+                <span className="login-label">Iniciar sesión</span>
               </button>
             )}
             <button className="menu-trigger" aria-label="Abrir menú" aria-expanded={showMenu} onClick={() => setShowMenu((open) => !open)}>

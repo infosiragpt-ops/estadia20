@@ -33,8 +33,9 @@ test("ships the finished estadia20 marketplace", async () => {
   // La cabecera es para el acceso: «Iniciar sesión» con la G de Google para
   // visitantes y la cuenta activa con sesión. Publicar vive en el menú
   // (hamburguesa) y en el pie.
-  assert.match(page, /className="host-link login-link" onClick={openLogin}/);
+  assert.match(page, /className="host-link login-link" onClick={openLogin} aria-label="Iniciar sesión"/);
   assert.match(page, /login-google-badge/);
+  assert.match(page, /className="login-label"/);
   assert.match(page, /className="host-link account-link" onClick={openLogin}/);
   assert.doesNotMatch(page, /className="host-link" onClick={requestPublish}/);
   assert.match(page, /onClick={requestPublish}>Publicar un anuncio</);
@@ -74,6 +75,21 @@ test("ships the finished estadia20 marketplace", async () => {
   assert.match(styles, /\.whatsapp-card\.whatsapp-demo/);
   assert.match(styles, /\.host-link/);
   assert.match(styles, /\.login-google-badge/);
+  // Chip de cabecera compacto (no crece con clamp) y avatar acotado al
+  // botón de cuenta, para que el retrato del modal no lo agrande.
+  assert.match(styles, /\.host-link \{[^}]*height: 40px;/);
+  assert.match(styles, /\.host-link \{[^}]*font-size: 13\.5px;/);
+  assert.doesNotMatch(styles, /\.host-link \{[^}]*font-size: clamp\(/);
+  assert.match(styles, /\.menu-trigger \{[^}]*height: 40px;/);
+  assert.doesNotMatch(styles, /\.menu-trigger \{[^}]*clamp\(48px/);
+  assert.match(styles, /\.account-link \.account-avatar, \.account-link \.account-initial \{ width: 30px; height: 30px;/);
+  assert.match(styles, /\.login-modal > \.account-avatar \{ width: 64px; height: 64px;/);
+  assert.doesNotMatch(styles, /\.account-avatar \{ width: 58px;/);
+  assert.match(styles, /\.google-cta \{ width: 100%; height: 40px;/);
+  assert.match(styles, /\.google-cta-button \{[^}]*font-size: 14px;/);
+  assert.match(styles, /\.login-modal \.primary-button \{ font-size: 14px; \}/);
+  assert.match(styles, /\.account-name \{ display: none; \}/);
+  assert.match(styles, /\.login-label \{ display: none; \}/);
   assert.match(styles, /\.favorite-row/);
   assert.match(styles, /\.favorites-empty/);
   assert.match(styles, /\.footer-publish-card/);
@@ -117,6 +133,12 @@ test("enlaza el Facebook oficial y el contacto por WhatsApp del administrador", 
   const bundle = await readFile(new URL(`vps/public/${scriptPath}`, root), "utf8");
   assert.ok(bundle.includes("https://www.facebook.com/profile.php?id=61592602154789"));
   assert.ok(bundle.includes("https://wa.me/51918714054"));
+  const cssPath = html.match(/assets\/index-[\w-]+\.css/)?.[0];
+  assert.ok(cssPath, "vps/public/index.html debe referenciar el bundle CSS");
+  const css = await readFile(new URL(`vps/public/${cssPath}`, root), "utf8");
+  assert.ok(css.includes(".account-link .account-avatar"), "el chip de cuenta debe acotar el avatar");
+  assert.ok(css.includes(".login-modal>.account-avatar") || css.includes(".login-modal > .account-avatar"), "el avatar del modal no debe filtrarse a la cabecera");
+  assert.ok(!css.includes("font-size:clamp(14px, 1vw, 20px)"));
 });
 
 test("keeps database, uploads, favorites, and inquiries deployable", async () => {
