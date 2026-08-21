@@ -295,6 +295,10 @@ test("el acceso con Google conserva la sesión del sitio y no cierra Google", as
   assert.match(page, /fetch\("\/api\/auth\/me", \{ credentials: "include" \}/);
   assert.match(page, /credentials: "include"/);
   assert.match(page, /\/api\/auth\/logout/);
+  assert.match(page, /function startGoogleOAuthRedirect/);
+  assert.match(page, /Accept: "application\/json"/);
+  assert.match(page, /authorizeUrl/);
+  assert.match(page, /accounts\.google\.com\/o\/oauth2\/v2\/auth\?/);
 
   assert.doesNotMatch(server, /["']prompt["']:\s*["'](select_account|consent|login)["']/);
   assert.doesNotMatch(server, /oauth2\/revoke/);

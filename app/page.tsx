@@ -328,6 +328,29 @@ function loadGoogleIdentityScript() {
   return googleIdentityScript;
 }
 
+const GOOGLE_AUTHORIZE_PREFIX = "https://accounts.google.com/o/oauth2/v2/auth?";
+
+async function startGoogleOAuthRedirect() {
+  // Primero se fija estadia20_oauth en un fetch mismo origen. Un
+  // location.assign directo a /start (200 + meta a Google) lo trata Safari
+  // como rebote y tira la cookie; el callback falla y parece que Google
+  // te botó.
+  try {
+    const response = await fetch("/api/auth/google/start", {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    const payload = (await response.json().catch(() => ({}))) as { authorizeUrl?: string };
+    const authorizeUrl = payload.authorizeUrl ?? "";
+    if (!response.ok || !authorizeUrl.startsWith(GOOGLE_AUTHORIZE_PREFIX)) {
+      throw new Error("invalid");
+    }
+    window.location.assign(authorizeUrl);
+  } catch {
+    window.location.assign("/api/auth/google/start");
+  }
+}
+
 const money = new Intl.NumberFormat("es-PE", {
   style: "currency",
   currency: "PEN",
@@ -2828,7 +2851,7 @@ function AuthModal({ user, resetToken, onResetHandled, onClose, onAuthenticated,
                 type="button"
                 className="google-cta-button"
                 disabled={!googleFlowEnabled || isSaving}
-                onClick={() => window.location.assign("/api/auth/google/start")}
+                onClick={() => void startGoogleOAuthRedirect()}
               >
                 <GoogleGIcon />
                 <span>Continuar con Google</span>

@@ -1540,6 +1540,7 @@ class Roomies20Handler(BaseHTTPRequestHandler):
         visitor_id: str | None = None,
         session_token: str | None = None,
         clear_session: bool = False,
+        oauth_state_value: str | None = None,
         cache_control: str = "no-store",
         etag: str | None = None,
         extra_headers: dict[str, str] | None = None,
@@ -1567,6 +1568,8 @@ class Roomies20Handler(BaseHTTPRequestHandler):
             )
         if session_token:
             self.send_header("Set-Cookie", session_cookie_header(session_token))
+        if oauth_state_value:
+            self.send_header("Set-Cookie", oauth_state_cookie_header(oauth_state_value))
         if clear_session:
             for cookie in cleared_session_cookie_headers():
                 self.send_header("Set-Cookie", cookie)
@@ -2968,8 +2971,18 @@ class Roomies20Handler(BaseHTTPRequestHandler):
                 "nonce": nonce,
             }
         )
+        authorize_url = f"{GOOGLE_OAUTH_AUTHORIZE}?{parameters}"
+        accept = (self.headers.get("Accept") or "").lower()
+        if "application/json" in accept:
+            # Cookie en la respuesta JSON (mismo origen, sin rebote). El
+            # navegador ya tiene estadia20_oauth antes de ir a Google.
+            self.send_json(
+                {"authorizeUrl": authorize_url},
+                oauth_state_value=f"{state}.{nonce}",
+            )
+            return
         self.send_auth_bridge(
-            f"{GOOGLE_OAUTH_AUTHORIZE}?{parameters}",
+            authorize_url,
             oauth_state_value=f"{state}.{nonce}",
         )
 

@@ -129,10 +129,19 @@ class GoogleAuthenticationTests(unittest.TestCase):
         return refresh
 
     def start_oauth_flow(self) -> tuple[str, str, str]:
-        """Inicia /api/auth/google/start y devuelve (state, nonce, cookie)."""
-        status, header_pairs, body = self.request_raw("GET", "/api/auth/google/start")
+        """Inicia /api/auth/google/start (JSON, como el botón) y devuelve
+        (state, nonce, cookie)."""
+        status, header_pairs, body = self.request_raw(
+            "GET",
+            "/api/auth/google/start",
+            headers={"Accept": "application/json"},
+        )
         self.assertEqual(status, 200)
-        location = self.google_authorize_url(header_pairs, body)
+        payload = json.loads(body)
+        location = payload["authorizeUrl"]
+        self.assertTrue(
+            location.startswith(f"{roomies_server.GOOGLE_OAUTH_AUTHORIZE}?")
+        )
         parameters = parse_qs(urlparse(location).query)
         cookie_value = self.set_cookies(header_pairs)["estadia20_oauth"]
         state, nonce = cookie_value.split(".", 1)
@@ -252,12 +261,36 @@ class GoogleAuthenticationTests(unittest.TestCase):
         self.assertIn("Secure", oauth_header)
         self.assertIn("Path=/", oauth_header)
 
-    def test_google_start_ignores_unknown_hosts_for_redirect_uri(self) -> None:
+    def test_google_start_json_sets_oauth_cookie_without_bounce(self) -> None:
         status, header_pairs, body = self.request_raw(
-            "GET", "/api/auth/google/start", headers={"Host": "atacante.example"}
+            "GET",
+            "/api/auth/google/start",
+            headers={"Accept": "application/json"},
         )
         self.assertEqual(status, 200)
-        parameters = parse_qs(urlparse(self.google_authorize_url(header_pairs, body)).query)
+        payload = json.loads(body)
+        parameters = parse_qs(urlparse(payload["authorizeUrl"]).query)
+        self.assertEqual(parameters["client_id"], [roomies_server.GOOGLE_CLIENT_ID])
+        self.assertNotIn("prompt", parameters)
+        self.assertFalse(any(name.lower() == "refresh" for name, _ in header_pairs))
+        self.assertFalse(any(name.lower() == "location" for name, _ in header_pairs))
+        oauth_header = self.cookie_header(header_pairs, "estadia20_oauth")
+        self.assertIn("SameSite=None", oauth_header)
+        self.assertIn("HttpOnly", oauth_header)
+        self.assertIn("Secure", oauth_header)
+        cookie_value = self.set_cookies(header_pairs)["estadia20_oauth"]
+        state, nonce = cookie_value.split(".", 1)
+        self.assertEqual(parameters["state"], [state])
+        self.assertEqual(parameters["nonce"], [nonce])
+
+    def test_google_start_ignores_unknown_hosts_for_redirect_uri(self) -> None:
+        status, header_pairs, body = self.request_raw(
+            "GET",
+            "/api/auth/google/start",
+            headers={"Host": "atacante.example", "Accept": "application/json"},
+        )
+        self.assertEqual(status, 200)
+        parameters = parse_qs(urlparse(json.loads(body)["authorizeUrl"]).query)
         self.assertEqual(
             parameters["redirect_uri"],
             [f"https://{roomies_server.OAUTH_DEFAULT_HOST}/api/auth/google/callback"],
